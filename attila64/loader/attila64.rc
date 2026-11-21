@@ -1,0 +1,34 @@
+// Icon, plus the name, maker and version Windows shows under Properties > Details. Stamp of the icon file: 79573B50D9EAD701B8983E5F3A344260
+#include "version.h"
+
+1 ICON "attila64.ico"
+
+// File names in UTF-8 for the game (see attila64.manifest). 24 = RT_MANIFEST.
+1 24 "attila64.manifest"
+
+1 VERSIONINFO
+FILEVERSION APP_VERSION_NUM
+PRODUCTVERSION APP_VERSION_NUM
+FILEFLAGSMASK 0x3f
+FILEFLAGS 0x0
+FILEOS 0x40004
+FILETYPE 0x1
+FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Sol Invictus"
+            VALUE "FileDescription", "64-bit Attila"
+            VALUE "FileVersion", APP_VERSION_TEXT
+            VALUE "LegalCopyright", "Sol Invictus. Not made or endorsed by Creative Assembly, Feral Interactive or SEGA."
+            VALUE "ProductName", "64-bit Attila"
+            VALUE "ProductVersion", APP_VERSION_TEXT
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END

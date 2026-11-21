@@ -1,0 +1,50 @@
+64-BIT ATTILA - THIRD PARTY NOTICES
+
+64-bit Attila is a loader by Sol Invictus, built with AI assistance.
+It is not made or endorsed by Creative Assembly, Feral Interactive or SEGA.
+Total War: ATTILA and its game files belong to their owners. No game files are included: every
+player must own the game and downloads the 64-bit game file from Steam with their own account.
+The loader and the installer themselves (and their source code) are under the MIT licence: see LICENSE.txt.
+
+This package includes the following separate works.
+
+------------------------------------------------------------------------------------------
+GNU C++ library (libstdc++.so.6) and GCC support library (libgcc_s.so.1), GCC 4.9, Debian build
+------------------------------------------------------------------------------------------
+Copyright (C) Free Software Foundation, Inc.
+Licensed under the GNU General Public License version 3 with the GCC Runtime Library Exception.
+Both texts are at the end of this file. These two files are unchanged.
+Source code: GCC 4.9 at https://gcc.gnu.org/  and the Debian package "gcc-4.9" at
+https://snapshot.debian.org/package/gcc-4.9/
+
+------------------------------------------------------------------------------------------
+SDL2 (SDL2.dll) version 2.24.1
+------------------------------------------------------------------------------------------
+Simple DirectMedia Layer
+Copyright (C) 1997-2022 Sam Lantinga <slouken@libsdl.org>
+
+This software is provided 'as-is', without any express or implied warranty. In no event will
+the authors be held liable for any damages arising from the use of this software.
+
+Permission is granted to anyone to use this software for any purpose, including commercial
+applications, and to alter it and redistribute it freely, subject to the following restrictions:
+
+1. The origin of this software must not be misrepresented; you must not claim that you wrote
+   the original software. If you use this software in a product, an acknowledgment in the
+   product documentation would be appreciated but is not required.
+2. Altered source versions must be plainly marked as such, and must not be misrepresented as
+   being the original software.
+3. This notice may not be removed or altered from any source distribution.
+
+------------------------------------------------------------------------------------------
+Steam API (steam_api64.dll)
+------------------------------------------------------------------------------------------
+Copyright (C) Valve Corporation. Part of the Steamworks SDK. Used only to connect to the Steam
+client already on the player's PC.
+
+------------------------------------------------------------------------------------------
+Icon
+------------------------------------------------------------------------------------------
+Portrait of Genghis Khan, Album of Yuan Emperor Portraits, 14th century, National Palace Museum,
+Taipei. Public domain, reproduction from Wikimedia Commons.
+

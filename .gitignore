@@ -1,0 +1,35 @@
+# Only our own source goes to GitHub. Everything below is built here, belongs to someone else, or is private.
+
+# built programs and what the compiler leaves
+*.exe
+*.dll
+*.pdb
+*.lib
+*.obj
+*.o
+
+# the game's files and other people's libraries
+*.pack
+*.so
+*.so.*
+/attila64/lib/
+/attila64/package/
+/attila_8player/vanilla_ui/
+/attila_8player/out/
+/attila_8player/out8/
+
+# the compiler itself
+/tools/
+
+# logs, test output, zips
+*.log
+*.zip
+attila64_log*.txt
+attila64_profile_*.txt
+err*.txt
+out.txt
+pkg_*.txt
+/send_to_friends/
+
+# the work diary stays on the PC
+CHANGES_NOT_RELEASED.md
