@@ -84,6 +84,9 @@ char **shim_environ(void) {
         if ((v = getenv("APPDATA"))) { snprintf(ad, sizeof ad, "APPDATA=%s", v); g_env[k++] = ad; }
         if ((v = getenv("LOCALAPPDATA"))) { snprintf(lad, sizeof lad, "LOCALAPPDATA=%s", v); g_env[k++] = lad; }
         if ((v = getenv("USERPROFILE"))) { snprintf(up, sizeof up, "USERPROFILE=%s", v); g_env[k++] = up; }
+        // The sign for mod scripts that this is 64-bit Attila: os.getenv("ATTILA64") == "1" here, nil in normal Attila
+        // (1212AD's script offers the switch to 64-bit only when it is nil).
+        g_env[k++] = "ATTILA64=1";
         done = 1;
     }
     return g_env;

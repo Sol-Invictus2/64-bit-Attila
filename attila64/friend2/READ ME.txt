@@ -1,11 +1,12 @@
 64-BIT ATTILA
-(version 1.3.6)
+(version 1.3.7)
 
 Bugs, crashes and logs: post them on Discord, https://discord.gg/3TUEGTMshP
 
 Runs Total War: ATTILA as a 64-bit game on Windows, using the 64-bit game file Steam
 offers for the Linux version. You need Total War: ATTILA on Steam, and Steam running.
-Your normal Attila is not changed: Steam's Play button still starts it.
+Your normal Attila files and saves are not changed. After installing, Steam's Play button
+  starts 64-bit Attila (the installer asks first).
 
 HOW TO INSTALL (about 5 minutes)
   1. Double-click  Install 64-bit Attila.exe
@@ -16,8 +17,10 @@ HOW TO INSTALL (about 5 minutes)
   5. Wait. The black window shows how far Steam's download is. After a few minutes
      Steam writes "Depot download complete", and the black window carries on by itself.
      Don't close it.
-  6. When the black window says "Done!", close it.
-  7. Start the game from the new "64-bit Attila" icon on your desktop.
+  6. The black window asks to set Steam's Play button to 64-bit Attila: press Enter.
+     Steam closes for a moment and opens again.
+  7. When the black window says "Done!", close it.
+  8. Press Play on Attila in Steam, or use the new "64-bit Attila" icon on your desktop.
 
   If the CONSOLE page didn't open: press the Windows key + R, type  steam://open/console
   and press Enter.

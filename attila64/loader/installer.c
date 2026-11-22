@@ -10,6 +10,7 @@
 #include <shlobj.h>
 #include <objidl.h>
 #include <shobjidl.h>
+#include <tlhelp32.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -288,7 +289,243 @@ static int make_icon(const char *exe, const char *folder, const char *game) {
     return ok;
 }
 
-static void uninstall(const char *folder) {
+// ---- Steam's Play button -------------------------------------------------------------------------------------------------
+// Steam keeps each game's Launch Options in userdata\<account>\config\localconfig.vdf, at
+// UserLocalConfigStore > Software > Valve > Steam > apps > 325610 > "LaunchOptions". With  "<our exe>" %command%  there, Play
+// starts our exe and hands it the path of Attila's own launcher, which our exe ignores (loader.c main). Steam reads the file
+// when it starts and writes it back when it closes, so it must be closed while we change it (it is started again afterwards).
+
+typedef struct { const char *key_start, *key_end; int is_block; const char *val_start, *val_end; } VdfTok;
+
+// Next quoted string at *p (Valve escapes: \\ and \"). Returns its body span, or 0 at '{', '}', or the end.
+static int vdf_string(const char **p, const char **s, const char **e) {
+    const char *c = *p;
+    while (*c && *c != '"' && *c != '{' && *c != '}') c++;
+    if (*c != '"') { *p = c; return 0; }
+    *s = ++c;
+    while (*c && *c != '"') { if (*c == '\\' && c[1]) c++; c++; }
+    *e = c;
+    *p = *c ? c + 1 : c;
+    return 1;
+}
+
+static int span_is(const char *s, const char *e, const char *word) {
+    size_t n = strlen(word);
+    return (size_t)(e - s) == n && !_strnicmp(s, word, n);
+}
+
+// Finds the apps block and Attila's block in it. Out: apps_open = just after the '{' of "apps", app_open = just after the '{' of
+// "325610" (NULL when missing), opt_s/opt_e = the LaunchOptions value body (NULL when missing). 0 = not the file we expect.
+static int vdf_find_attila(const char *text, const char **apps_open, const char **app_open, const char **opt_s, const char **opt_e) {
+    static const char *const path[] = {"UserLocalConfigStore", "Software", "Valve", "Steam", "apps", "325610"};
+    const char *keys_s[16], *keys_e[16];
+    int depth = 0;
+    const char *p = text;
+    *apps_open = *app_open = *opt_s = *opt_e = NULL;
+    for (;;) {
+        const char *ks, *ke;
+        if (!vdf_string(&p, &ks, &ke)) {
+            if (!*p) break;
+            if (*p == '}') { if (depth) depth--; p++; continue; }
+            p++;   // a '{' without a key: not expected, step over
+            continue;
+        }
+        // key read; its value is a string or a block
+        const char *q = p;
+        while (*q == ' ' || *q == '\t' || *q == '\r' || *q == '\n') q++;
+        if (*q == '{') {
+            if (depth < 16) { keys_s[depth] = ks; keys_e[depth] = ke; }
+            depth++;
+            p = q + 1;
+            int match = depth <= 6;
+            for (int i = 0; match && i < depth; i++) match = span_is(keys_s[i], keys_e[i], path[i]);
+            if (match && depth == 5) *apps_open = p;
+            if (match && depth == 6) *app_open = p;
+            continue;
+        }
+        const char *vs, *ve;
+        if (!vdf_string(&p, &vs, &ve)) continue;
+        if (*app_open && !*opt_s && depth == 6 && span_is(ks, ke, "LaunchOptions")) {
+            int inside = 1;   // still inside Attila's block (its path is the current one)
+            for (int i = 0; inside && i < depth; i++) inside = span_is(keys_s[i], keys_e[i], path[i]);
+            if (inside) { *opt_s = vs; *opt_e = ve; }
+        }
+    }
+    return *apps_open != NULL;
+}
+
+// Valve text without its escapes.
+static void vdf_unescape(const char *s, const char *e, char *out, size_t size) {
+    size_t w = 0;
+    for (; s < e && w + 1 < size; s++) {
+        if (*s == '\\' && s + 1 < e) s++;
+        out[w++] = *s;
+    }
+    out[w] = 0;
+}
+
+static void vdf_escape(const char *s, char *out, size_t size) {
+    size_t w = 0;
+    for (; *s && w + 2 < size; s++) {
+        if (*s == '\\' || *s == '"') out[w++] = '\\';
+        out[w++] = *s;
+    }
+    out[w] = 0;
+}
+
+static int contains_nocase(const char *hay, const char *needle) {
+    for (size_t n = strlen(needle); *hay; hay++) if (!_strnicmp(hay, needle, n)) return 1;
+    return 0;
+}
+
+// One localconfig.vdf. on = 1 sets our line, on = 0 clears it (only when it is ours). Returns 1 changed, 0 nothing to do,
+// -1 left alone (someone else's Launch Options), -2 could not read or write.
+static int launch_option_file(const char *vdf, const char *line_utf8, int on) {
+    char *text = read_text(vdf);
+    if (!text) return -2;
+    const char *apps, *app, *os, *oe;
+    if (!vdf_find_attila(text, &apps, &app, &os, &oe)) { free(text); return -2; }
+    char old[2048] = "", esc[MAX_PATH * 4];
+    if (os) vdf_unescape(os, oe, old, sizeof old);
+    int ours = contains_nocase(old, "attila64.exe");
+    if (on ? !strcmp(old, line_utf8) : !ours) { free(text); return 0; }
+    if (on && old[0] && !ours) { free(text); return -1; }
+    vdf_escape(on ? line_utf8 : "", esc, sizeof esc);
+    size_t n = strlen(text), add = strlen(esc) + 64;
+    char *out = malloc(n + add + 1);
+    if (!out) { free(text); return -2; }
+    if (os) {   // replace the value
+        size_t a = (size_t)(os - text), b = (size_t)(oe - text);
+        snprintf(out, n + add + 1, "%.*s%s%s", (int)a, text, esc, text + b);
+    } else if (app) {   // Attila's block without the key: add it as the block's first line
+        size_t a = (size_t)(app - text);
+        snprintf(out, n + add + 1, "%.*s\n\t\t\t\t\t\t\"LaunchOptions\"\t\t\"%s\"%s", (int)a, text, esc, text + a);
+    } else {   // no block for Attila yet
+        size_t a = (size_t)(apps - text);
+        snprintf(out, n + add + 1, "%.*s\n\t\t\t\t\t\"325610\"\n\t\t\t\t\t{\n\t\t\t\t\t\t\"LaunchOptions\"\t\t\"%s\"\n\t\t\t\t\t}%s", (int)a, text, esc, text + a);
+    }
+    char bak[MAX_PATH * 3];
+    snprintf(bak, sizeof bak, "%s.before_64bit_attila", vdf);
+    if (GetFileAttributesA(bak) == INVALID_FILE_ATTRIBUTES) CopyFileA(vdf, bak, TRUE);   // the first change keeps the original
+    int ok = write_file(vdf, (const uint8_t *)out, strlen(out));
+    free(out);
+    free(text);
+    return ok ? 1 : -2;
+}
+
+static DWORD process_named(const char *name) {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    PROCESSENTRY32 pe = {sizeof pe};
+    DWORD id = 0;
+    if (snap == INVALID_HANDLE_VALUE) return 0;
+    for (BOOL more = Process32First(snap, &pe); more && !id; more = Process32Next(snap, &pe))
+        if (!_stricmp(pe.szExeFile, name)) id = pe.th32ProcessID;
+    CloseHandle(snap);
+    return id;
+}
+static DWORD steam_process(void) { return process_named("steam.exe"); }
+static DWORD game_process(void) { return process_named("Attila.exe"); }
+
+// on = 1: Steam's Play button starts the 64-bit game; on = 0: back to normal. ask = put the question first.
+// Returns 1 when Play starts 64-bit Attila afterwards.
+static int steam_play_button(const char *steam, const char *exe, int on, int ask) {
+    char ud[MAX_PATH * 2], find[MAX_PATH * 2], vdf[MAX_PATH * 3], line[MAX_PATH * 4];
+    WCHAR w[MAX_PATH * 2];
+    char exe_utf8[MAX_PATH * 3];
+    MultiByteToWideChar(CP_ACP, 0, exe, -1, w, MAX_PATH * 2);
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, exe_utf8, sizeof exe_utf8, NULL, NULL);
+    snprintf(line, sizeof line, "\"%s\" %%command%%", exe_utf8);
+    snprintf(ud, sizeof ud, "%s\\userdata", steam);
+    snprintf(find, sizeof find, "%s\\*", ud);
+
+    // what is to be done, before closing Steam for nothing
+    int todo = 0, foreign = 0, accounts = 0;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(find, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
+            snprintf(vdf, sizeof vdf, "%s\\%s\\config\\localconfig.vdf", ud, fd.cFileName);
+            char *text = read_text(vdf);
+            if (!text) continue;
+            const char *apps, *app, *os, *oe;
+            if (vdf_find_attila(text, &apps, &app, &os, &oe)) {
+                char old[2048] = "";
+                if (os) vdf_unescape(os, oe, old, sizeof old);
+                int ours = contains_nocase(old, "attila64.exe");
+                accounts++;
+                if (on && old[0] && !ours) foreign++;
+                else if (on ? strcmp(old, line) != 0 : ours) todo++;
+            }
+            free(text);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    if (on && foreign) {
+        printf("\nAttila already has other Launch Options in Steam, so they were left as they are. To start 64-bit Attila\n"
+               "with Steam's Play button, right-click Attila > Properties > General > Launch Options and put in this line:\n  %s\n", line);
+    }
+    if (!todo) return on && accounts && !foreign;
+
+    int running = !g_test && steam_process() != 0;
+    if (ask) {
+        if (on) printf("\nMake Steam's Play button start 64-bit Attila?%s\nPress Enter for yes, or type N and press Enter for no: ",
+                       running ? " Steam closes for a moment for this and opens again." : "");
+        else printf("\nSteam's Play button still starts 64-bit Attila. Put it back to normal Attila?%s\n"
+                    "Press Enter for yes, or type N and press Enter for no: ", running ? " Steam closes for a moment for this." : "");
+        char a[16] = "";
+        if (!g_test) fgets(a, sizeof a, stdin);
+        if (a[0] == 'n' || a[0] == 'N') {
+            if (on) printf("Skipped. Use the desktop icon for 64-bit Attila.\n");
+            else printf("Skipped. To undo it later: Steam > right-click Attila > Properties > General, clear Launch Options.\n");
+            return 0;
+        }
+    }
+    if (running) {
+        printf("Closing Steam...\n");
+        char se[MAX_PATH * 2];
+        snprintf(se, sizeof se, "%s\\steam.exe", steam);
+        ShellExecuteA(NULL, "open", se, "-shutdown", NULL, SW_SHOWNORMAL);
+        DWORD t0 = GetTickCount();
+        while (steam_process() && GetTickCount() - t0 < 90000) Sleep(1000);
+        if (steam_process()) {
+            printf("Steam did not close. Close it yourself (Steam menu > Exit), then run this again.\n");
+            return 0;
+        }
+        Sleep(2000);   // Steam has just written its files
+    }
+    int changed = 0, failed = 0;
+    h = FindFirstFileA(find, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
+            snprintf(vdf, sizeof vdf, "%s\\%s\\config\\localconfig.vdf", ud, fd.cFileName);
+            if (GetFileAttributesA(vdf) == INVALID_FILE_ATTRIBUTES) continue;
+            int r = launch_option_file(vdf, line, on);
+            if (r == 1) changed++;
+            if (r == -2) failed++;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    if (running) {   // start Steam again through Explorer, so it is not run as administrator when this installer is
+        char se[MAX_PATH * 2];
+        snprintf(se, sizeof se, "\"%s\\steam.exe\"", steam);
+        ShellExecuteA(NULL, "open", "explorer.exe", se, NULL, SW_SHOWNORMAL);
+        printf("Starting Steam again...\n");
+    }
+    if (failed) printf("Could not change Steam's settings file. You can do it by hand: Steam > right-click Attila > Properties >\n"
+                       "General > Launch Options%s\n", on ? ", and put in this line:" : ", and clear the line.");
+    if (failed && on) printf("  %s\n", line);
+    if (changed) printf(on ? "Steam's Play button now starts 64-bit Attila.\n" : "Steam's Play button starts normal Attila again.\n");
+    return on ? changed > 0 && !failed : 0;
+}
+
+static void uninstall(const char *folder, const char *steam) {
+    {   // Steam's Play button back to normal Attila first, while our exe is still there
+        char exe[MAX_PATH * 2];
+        snprintf(exe, sizeof exe, "%s\\attila64.exe", folder);
+        if (steam[0]) steam_play_button(steam, exe, 0, 0);
+    }
     char p[MAX_PATH * 2];
     int left = 0;
     for (size_t i = 0; i < NFILES; i++) {
@@ -313,8 +550,7 @@ static void uninstall(const char *folder) {
         finish(1);
     }
     printf("64-bit Attila is removed. Your normal Attila and your saves are not touched.\n");
-    printf("If you added a Launch Option in Steam for it, clear that line too.\n");
-    finish(0);
+   finish(0);
 }
 
 static void unusable_message(const char *what) {
@@ -339,6 +575,9 @@ static void relaunch_as_admin(int argc, char **argv) {
 int main(int argc, char **argv) {
     char steam[MAX_PATH] = "", game[MAX_PATH * 2] = "", folder[MAX_PATH * 2], target[MAX_PATH * 2], depot[MAX_PATH * 2], p[MAX_PATH * 3];
     const char *arg = argc > 1 ? argv[1] : "";
+    // "from-game": started by a mod script in normal Attila after the player chose the switch (1212AD). No questions: install or
+    // update, and set Steam's Play button. The game closes itself right after starting this, so wait for it first.
+    int from_game = !strcmp(arg, "from-game");
     g_test = getenv("ATTILA_INSTALL_TEST");
     // A click inside the window would otherwise pause the installer until a key is pressed.
     {
@@ -356,6 +595,7 @@ int main(int argc, char **argv) {
     if (g_test) {
         snprintf(game, sizeof game, "%s\\game", g_test);
         snprintf(depot, sizeof depot, "%s\\depot\\Attila", g_test);
+        snprintf(steam, sizeof steam, "%s\\steam", g_test);   // a test's own userdata\\<account>\\config\\localconfig.vdf
         CreateDirectoryA(game, NULL);
     } else {
         if (!find_steam(steam, sizeof steam)) {
@@ -386,12 +626,22 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    if (!strcmp(arg, "uninstall")) uninstall(folder);
-    if (is_folder(folder) && !g_test) {
+    if (from_game && !g_test) {
+        printf("Waiting for Attila to close...\n");
+        for (int i = 0; i < 60 && game_process(); i++) Sleep(1000);
+        if (game_process()) { printf("Attila is still open. Close it, then run this again.\n"); finish(1); }
+    }
+    if (!strcmp(arg, "uninstall")) uninstall(folder, steam);
+    if (!strcmp(arg, "play-on") || !strcmp(arg, "play-off")) {   // only Steam's Play button
+        snprintf(p, sizeof p, "%s\\attila64.exe", folder);
+        steam_play_button(steam, p, !strcmp(arg, "play-on"), 0);
+        finish(0);
+    }
+    if (is_folder(folder) && !g_test && !from_game) {
         printf("\n64-bit Attila is already here. Type 1 to update it, 2 to remove it, then press Enter: ");
         char line[16] = "";
         fgets(line, sizeof line, stdin);
-        if (line[0] == '2') uninstall(folder);
+        if (line[0] == '2') uninstall(folder, steam);
         if (line[0] != '1') finish(0);
     }
 
@@ -474,10 +724,16 @@ int main(int argc, char **argv) {
     if (!make_icon(p, folder, game)) printf("Could not make the desktop icon. You can start this instead:\n  %s\n", p);
     else printf("Desktop icon made: 64-bit Attila\n");
 
+    // Steam's Play button
+    int play = steam_play_button(steam, p, 1, !from_game);
+
     if (file_size(target) != GAME_FILE_SIZE) printf("\nNote: Steam's game file is a different size than the one this was tested with. It may not work.\n");
-    printf("\nDone! Keep Steam running and start the game from the \"64-bit Attila\" icon on your desktop.\n");
+    if (play) printf("\nDone! Press Play on Attila in Steam, or use the \"64-bit Attila\" icon on your desktop.\n");
+    else printf("\nDone! Keep Steam running and start the game from the \"64-bit Attila\" icon on your desktop.\n");
     printf("A mod list opens first: tick your mods and press Play. The first start can take a minute or more.\n");
-    printf("\nIMPORTANT: Steam's Play button still starts NORMAL 32-bit Attila. Use the desktop icon for the 64-bit game.\n");
+    if (!play) printf("\nIMPORTANT: Steam's Play button still starts NORMAL 32-bit Attila. Use the desktop icon for the 64-bit game.\n");
+    else printf("\nTo play normal 32-bit Attila again: run this installer and remove 64-bit Attila, or clear Attila's\n"
+                "Launch Options in Steam (right-click Attila > Properties > General).\n");
     printf("If something goes wrong, send this file:\n  %s\\attila64_log.txt\n", folder);
     finish(0);
     return 0;
