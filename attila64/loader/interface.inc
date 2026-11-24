@@ -4,8 +4,8 @@
 // ---- Interface size. WARSCAPE::WS_ENGINE_IMP::get_ui_restricted_screen_size(bool) (30ff560) gives the screen size the interface
 // is laid out for (width in the low 32 bits, height in the high); the interface is then stretched over the real screen. The game's
 // own ui_scale (float at 5256be8, its options slider is not in the layouts) pulls that size towards 1440 x 900, unevenly in width
-// and height. This zooms evenly instead: the size is divided by the player's factor, never below the game's smallest layout
-// (1440 x 900). The factor comes from the mod list window (settings.txt next to the exe): Auto = looks like 1080p (screen height
+// and height. This zooms evenly instead: the size is divided by the player's factor, never below 1440 wide and 1080 high
+// (bigger panels go off screen lower than that). The factor comes from the mod list window (settings.txt next to the exe): Auto = looks like 1080p (screen height
 // / 1080), or a percentage. Display only: UI code, nothing in the shared game.
 float g_ui_size;                 // 0 = auto, otherwise the factor (1 = the game's own size); set from main
 static volatile float g_ui_zoom_now;   // the zoom in use (real / laid-out size), 0 while the interface is not zoomed
@@ -17,8 +17,14 @@ static SYSV uint64_t ui_restricted_size(void *engine, int use_scale) {
     // EMPIREBATTLE::BATTLE_UI::draw places the drag-selection box (a TWUI component, so laid-out units) from the mouse position
     // times the UNSCALED size (two calls with use_scale = 0, returning to 2c1417a and 2c14197): with the zoom the box sat
     // zoom times too far right and down. Those two calls get the laid-out size as well.
+    // Films too: the full-screen film rectangle is worked out from the UNSCALED size, but the film is drawn through the zoomed
+    // interface (VP8::VIDEO_CONTROLLER::draw, scaled path), so with the zoom it came out zoom times too big from the top-left
+    // corner: off-centre and cut off at the right and bottom (tester report 2026-11-22, intro film). Those callers get the
+    // laid-out size: MVC_MANAGER::update_movies (intro films), FRONT_END_UI::set_movie_position_and_dimension, FRONT_END_UI::draw,
+    // FRONT_END_UI::play_movie_in_component, BATTLE_UI::notify(PLAY_MOVIE_MSG).
     uintptr_t from = (uintptr_t)__builtin_return_address(0);
-    if (!(use_scale & 0xff) && from != 0x2c1417a && from != 0x2c14197) {
+    int film = from == 0x571a40 || from == 0x29a5ce8 || from == 0x29a5e15 || from == 0x29a60dd || from == 0x2c11d62;
+    if (!(use_scale & 0xff) && from != 0x2c1417a && from != 0x2c14197 && !film) {
         // the unscaled size: with upscaling that is the window, not the game's smaller frame (the interface's root box is made this
         // large by UIDLL::COMMON_UI::load_layout, and everything outside it is cut off)
         extern int upscale_window_size(uint32_t *, uint32_t *);
@@ -35,8 +41,15 @@ static SYSV uint64_t ui_restricted_size(void *engine, int use_scale) {
     if (!upscaled) { w = fw; h = fh; }
     if (w < 1440 || h < 900) { g_ui_zoom_now = 0; return upscaled ? (uint64_t)h << 32 | w : r; }
     float f = g_ui_size > 0 ? g_ui_size : (float)h / 1080.0f;
-    float most = (float)w / 1440.0f < (float)h / 900.0f ? (float)w / 1440.0f : (float)h / 900.0f;
-    if (f > most) f = most;
+    // Never laid out lower than 1080: bigger panels (1212AD's new-campaign screen and others) are made for at least 1080 high and
+    // went off the top of the screen at 3440x1440 with 150% (laid out 960 high; tester report 2026-11-22). So on a 1440 high screen
+    // 150% and more give 133%, on a 2160 high screen at most 200%. Width: never below 1440 (the game's smallest layout).
+    float most = (float)w / 1440.0f < (float)h / 1080.0f ? (float)w / 1440.0f : (float)h / 1080.0f;
+    if (f > most + 0.001f) {
+        static int told_cap;
+        if (!told_cap++) log_line("interface size: %.0f%% would lay the interface out lower than 1080 (panels would not fit), %.0f%% used", f * 100.0f, most * 100.0f);
+        f = most;
+    }
     if (f < 1.01f) { g_ui_zoom_now = 0; return upscaled ? (uint64_t)h << 32 | w : r; }
     uint32_t nw = (uint32_t)((float)w / f + 0.5f), nh = (uint32_t)((float)h / f + 0.5f);
     g_ui_zoom_now = (float)h / (float)nh;

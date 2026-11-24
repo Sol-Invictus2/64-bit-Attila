@@ -225,6 +225,16 @@ static void __cdecl audio_tramp(void *u, uint8_t *s, int n) {
 SHIM(uint32_t, SDL_OpenAudioDevice, (const char *dev, int cap, const AudioSpec *want, AudioSpec *have, int allowed)) {
     uint32_t (__cdecl *real)(const char *, int, const AudioSpec *, AudioSpec *, int) = (void *)GetProcAddress(sdl_dll(), "SDL_OpenAudioDevice");
     AudioSpec w = *want;
+    // The game's sound engine (Wwise CAkSinkSDL2::_Init 37004d0) with a speaker setting chosen in the options (5.1, 7.1, ...)
+    // opens the device WITHOUT a channel count (memset spec, channels 0, no changes allowed), so SDL opens it as stereo, while
+    // Wwise keeps mixing its own 6 or 8 channels into that buffer: music and close sounds came out wrong and quiet, only faint
+    // "distant" sounds left (tester report 2026-11-22; measured here: 5.1 / 7.1 output 2-4 times quieter than stereo). Only the
+    // automatic path asks for channels itself. The sink (userdata) holds its channel count at +0xc (AkChannelConfig, low byte):
+    // the device is opened with that count, and Windows / SDL mix it down to the real speakers. ATTILA_NO_SOUND_CHANNEL_FIX=1 = off.
+    if (!w.channels && w.userdata && !getenv("ATTILA_NO_SOUND_CHANNEL_FIX")) {
+        uint8_t ch = *((const uint8_t *)w.userdata + 0xc);
+        if (ch >= 1 && ch <= 8) { w.channels = ch; log_line("sound device: the game's sound engine mixes %u channels but asked for none; device opened with %u", ch, ch); }
+    }
     AudioCtx *c = malloc(sizeof *c);
     c->fn = (audio_cb)want->callback;
     c->user = want->userdata;
@@ -905,6 +915,7 @@ static void test_input_parse(void) {
 // ATTILA_TEST_INPUT without the time ("click 640 360", "key return 0.1"), run at once, or "shot" = a picture now. For
 // steering a hidden copy during a long run, e.g. answering a dilemma window after looking at a picture.
 void test_shot_now(void);
+void test_ui_dump(const char *name);   // multiplayer.inc: "uidump <component name>" writes that interface part's tree to the log
 static void test_cmd_poll(double now) {
     static int init;
     static const char *path;
@@ -926,6 +937,7 @@ static void test_cmd_poll(double now) {
     g_ntin = k;
     for (char *line = strtok(buf, "\r\n"); line; line = strtok(NULL, "\r\n")) {
         if (!strncmp(line, "shot", 4)) { test_shot_now(); log_line("test command: picture"); continue; }
+        if (!strncmp(line, "uidump ", 7)) { test_ui_dump(line + 7); continue; }
         char step[160];
         snprintf(step, sizeof step, "0:%.150s", line);
         g_tin_every = 0;
@@ -1019,9 +1031,44 @@ SHIM(const uint8_t *, SDL_GetKeyboardState, (int *numkeys)) {
     for (int i = 0; i < n; i++) g_tin_keystate[i] = real[i] | g_tin_keys[i];
     return g_tin_keystate;
 }
+// ---- The cursor stays on the game's screen in full screen. Normal (32-bit, Windows) Attila keeps the cursor inside its full-screen
+// window; the Linux game never asks for that (no SDL_SetWindowGrab), and our full screen is a borderless window the size of the
+// screen, so with a second monitor to the right or below the cursor slid onto it and the battle and campaign camera never
+// scrolled at those edges (tester report 2026-11-22: "I can't put the cursor on the right and below the screen to move the
+// camera"). While the game window is full screen and in front, the cursor is kept inside it (Windows ClipCursor, renewed
+// every half second: Windows drops it on focus changes); behind another window (Alt+Tab) it is let go. Cursor only, nothing
+// in the shared game. settings.txt cursor_lock=off turns it off; never in hidden tests.
+static void cursor_lock_tick(void) {
+    static int off = -1, held;
+    static DWORD last;
+    if (off < 0) {
+        extern int settings_cursor_lock_off(void);   // picker.c
+        off = test_hidden() || settings_cursor_lock_off();
+        if (!off) log_line("cursor: kept on the game's screen while the game is full screen and in front (settings.txt cursor_lock=off = never)");
+    }
+    if (off || !g_test_window) return;
+    DWORD now = GetTickCount();
+    if (now - last < 500) return;
+    last = now;
+    static uint32_t (__cdecl *flags_of)(void *);
+    if (!flags_of) flags_of = (void *)GetProcAddress(sdl_dll(), "SDL_GetWindowFlags");
+    HWND fg = GetForegroundWindow();
+    DWORD pid = 0;
+    char cls[32] = "";
+    if (fg) { GetWindowThreadProcessId(fg, &pid); GetClassNameA(fg, cls, sizeof cls); }
+    int full = flags_of && (flags_of(g_test_window) & 0x1u);   // SDL_WINDOW_FULLSCREEN (also part of the desktop full-screen flags)
+    RECT rc;
+    if (full && fg && pid == GetCurrentProcessId() && !strcmp(cls, "SDL_app") && !IsIconic(fg) && GetClientRect(fg, &rc)) {
+        POINT a = {rc.left, rc.top}, b = {rc.right, rc.bottom};
+        ClientToScreen(fg, &a); ClientToScreen(fg, &b);
+        RECT clip = {a.x, a.y, b.x, b.y};
+        if (clip.right > clip.left && clip.bottom > clip.top) { ClipCursor(&clip); held = 1; }
+    } else if (held) { ClipCursor(NULL); held = 0; }
+}
 SHIM(int, SDL_PollEvent, (void *event)) {
     static int (__cdecl *r)(void *);
     if (!r) r = (void *)GetProcAddress(sdl_dll(), "SDL_PollEvent");
+    cursor_lock_tick();
     test_auto_tick();   // the game's event pump, on its main thread: where an unattended run starts the benchmark
     if (!event) return r(event);
     for (;;) {   // a left click on the Discord button (menu_button.c) is ours: the game gets the next event instead

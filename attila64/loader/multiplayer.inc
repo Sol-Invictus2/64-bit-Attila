@@ -1001,6 +1001,7 @@ GAME_FN(ui_set_texture, 0x293aa00, void, void *, const CaString *, int, int);
 GAME_FN(ui_create_from_copy, 0x2939610, uint8_t *, void *, void *, const CaString *, void *, void *, void *, int, int, const void *,
         int, void *);
 GAME_FN(ui_set_visible, 0x29168a0, void, void *, int);
+GAME_FN(lsui_create_from, 0x2b58f10, uint8_t *, void *, void *, void *, const CaString *);   // LoadingScreenUI::CreateFromComponent
 GAME_FN(ui_height, 0x2916bf0, float, void *);
 static uint8_t *ui_find(uint8_t *root, const char *name) {
     CaString s;
@@ -1023,6 +1024,20 @@ static void ui_move(uint8_t *c, float x, float y) {   // MoveToRelative, vtable 
     SYSV void (*move)(void *, const float *) = (SYSV void (*)(void *, const float *))(*(void ***)c)[0xb0 / 8];
     move(c, pos);
 }
+// an icon of the loading screen's header: placed through its dock offset when docked, else in its parent; made size x size
+static void mon_place(uint8_t *c, float x, float y) {
+    if (*(int32_t *)(c + 0x1a0)) {
+        float off[2] = {x, y};
+        ((SYSV void (*)(void *, const float *))(uintptr_t)0x29235b0)(c, off);   // TWUI::Component::SetDockOffset (re-docks)
+    } else ui_move(c, x, y);
+}
+static void mon_size(uint8_t *c, float size) {
+    if (ui_height(c) <= size + 0.5f) return;
+    uint8_t was_w = c[0x190], was_h = c[0x191];
+    c[0x190] = c[0x191] = 1;
+    ((SYSV void (*)(void *, float, float, int, int))(uintptr_t)0x2916c40)(c, size, size, 1, 1);   // TWUI::Component::Resize
+    c[0x190] = was_w; c[0x191] = was_h;
+}
 static SYSV void loading_screen_mons(void *self, uint8_t *panel, const uint8_t *alliance, uint32_t main_army) {
     lsp_flags_setup(self, panel, alliance, main_army);
     if (!panel || !alliance) return;
@@ -1033,16 +1048,22 @@ static SYSV void loading_screen_mons(void *self, uint8_t *panel, const uint8_t *
     char name[8];
     for (int k = 0; k < 8; k++) { snprintf(name, sizeof name, "mon%d", k); mon[k] = ui_find(panel, name); }
     if (!mon[0] || !mon[1] || !mon[2] || !mon[3] || mon[4]) return;   // another layout, or done already
-    float half = (ui_height(mon[1]) + 2.0f) * 0.5f, rel[4][2];
-    for (int k = 0; k < 4; k++) { rel[k][0] = *(float *)(mon[k] + 0x120); rel[k][1] = *(float *)(mon[k] + 0x124); }
-    for (int k = 0; k < 4; k++) ui_move(mon[k], rel[k][0], rel[k][1] - half);
+    // The icons are docked (dock point +1a0h, offset +1a4h / +1a8h): the engine places them from that offset every time it
+    // docks, so a plain move did not last and the copies (mon1's offset) all landed on mon1 (user's 2026-11-22 picture: 4 a
+    // side only). Rows now go through the dock offset; icons 44 high instead of 50 so two rows fit in the header frame.
+    float size = ui_height(mon[1]) > 44.0f ? 44.0f : ui_height(mon[1]), half = (size + 2.0f) * 0.5f, rel[4][2];
+    for (int k = 0; k < 4; k++) {
+        int docked = *(int32_t *)(mon[k] + 0x1a0) != 0;
+        rel[k][0] = *(float *)(mon[k] + (docked ? 0x1a4 : 0x120)); rel[k][1] = *(float *)(mon[k] + (docked ? 0x1a8 : 0x124));
+    }
+    for (int k = 0; k < 4; k++) { mon_size(mon[k], size); mon_place(mon[k], rel[k][0], rel[k][1] - half); }
     void *lib = *(void **)0x5163480;                             // TWUI::ComponentTemplateLibrary::m_LibraryInstance
     int made = 0, slot = 1;                                      // the game's numbering: mon1.. = the other armies in order
-    if (!lib) log_line("loading screen: no template library");
+    if (!lib && !*(void **)0x5172fc8) log_line("loading screen: no template library");
     log_line("loading screen: panel %p, mon0 %p, mon1 %p, parent found %p, parent link %p, children %u",
              (void *)panel, (void *)mon[0], (void *)mon[1], (void *)ui_parent_of(panel, mon[0], 3), *(void **)(mon[0] + 0x108),
              *(uint32_t *)(panel + 0x114));
-    for (uint32_t i = 0; i < n && slot < 8 && lib; i++) {
+    for (uint32_t i = 0; i < n && slot < 8 && (lib || *(void **)0x5172fc8); i++) {
         if (i == main_army) continue;
         int k = slot++;
         if (k < 4) continue;
@@ -1052,10 +1073,12 @@ static SYSV void loading_screen_mons(void *self, uint8_t *panel, const uint8_t *
         CaString nm;
         snprintf(name, sizeof name, "mon%d", k);
         ca_string_from_c(&nm, name);
-        uint8_t *c = ui_create_from_copy(lib, mon[1], &nm, NULL, NULL, parent, 0, 0, NULL, 1, NULL);
+        void *lsui = *(void **)0x5172fc8;   // UIDLL::LoadingScreenUI::s_loading_screen_ui: makes copies the way the screen's own code does
+        uint8_t *c = lsui ? lsui_create_from(lsui, mon[1], parent, &nm) : ui_create_from_copy(lib, mon[1], &nm, NULL, NULL, parent, 0, 0, NULL, 1, NULL);
         ca_string_free(&nm);
         if (!c) break;
-        ui_move(c, rel[k - 4][0], rel[k - 4][1] + half);
+        mon_size(c, size);
+        mon_place(c, rel[k - 4][0], rel[k - 4][1] + half);
         ui_set_visible(c, 1);
         const CaString *fs = (const CaString *)(armies + (size_t)i * 0x2c8 + 0x40);   // the faction's flag folder, as the game uses it
         if (fs->text && fs->len && fs->len < 400) {
@@ -1090,6 +1113,413 @@ static void patch_loading_screen_eight(void) {
     log_line("patch applied: battle loading screen shows up to 8 faction icons a side (two rows)");
 }
 
+// ---- 8v8 battle screens (the 64-bit Rome 2 engine's stage 25 idea, for Attila). Display only: UI code, run once when each
+// screen is made, after the game's own OnCreate (its vtable entry points to ours).
+//  - Battle loading screen (UIDLL::BattleLoadingScreenPanel): in multiplayer the game hides the side boxes and shows the armies
+//    as faction icons "mon0".."mon3" a side; mon4..7 (patch_loading_screen_eight) are now made with the screen's own
+//    LoadingScreenUI::CreateFromComponent (the template library it used before was empty: no icons 5-8 were ever made).
+//  - Results screen after a multiplayer battle (UIDLL::PostBattleLoadingScreenPanel): see results_screen_create.
+// TWUI::Component fields used (the engine's own, read from the Linux build): +f8h name, +108h parent, +114h / +118h children,
+// +120h / +124h position in the parent, +128h / +12ch position on screen, +140h state (+40h width, +44h height), +190h / +191h
+// "may change width / height", +1a0h dock point (0 = none), +1a4h / +1a8h dock offset. ATTILA_NO_8V8_SCREENS=1 = the results
+// screen as the game makes it; ATTILA_UI_DUMP=1 writes both screens' component trees to the log; ATTILA_TEST_SHOT_SCREENS=1
+// takes a test picture as each screen appears.
+GAME_FN(ui_resize_fn, 0x2916c40, void, void *, float, float, int, int);   // TWUI::Component::Resize(w, h, scale children, ...)
+GAME_FN(ui_set_dock_offset, 0x29235b0, void, void *, const float *);       // TWUI::Component::SetDockOffset
+GAME_FN(ui_is_visible, 0x2914b40, uint8_t, void *, int);                   // TWUI::Component::IsVisible
+#define UI_KIDS(c) (*(uint32_t *)((uint8_t *)(c) + 0x114))
+#define UI_KID(c, i) ((*(uint8_t ***)((uint8_t *)(c) + 0x118))[i])
+#define UI_X(c) (*(float *)((uint8_t *)(c) + 0x128))
+#define UI_Y(c) (*(float *)((uint8_t *)(c) + 0x12c))
+static float ui_w(uint8_t *c) { uint8_t *s = *(uint8_t **)(c + 0x140); return s ? *(float *)(s + 0x40) : 0.0f; }
+static float ui_h(uint8_t *c) { uint8_t *s = *(uint8_t **)(c + 0x140); return s ? *(float *)(s + 0x44) : 0.0f; }
+static const char *ui_name(uint8_t *c, char *buf, size_t n) {
+    const CaString *s = (const CaString *)(c + 0xf8);
+    snprintf(buf, n, "%.*s", s->text && s->len < 80 ? (int)s->len : 0, s->text ? s->text : "");
+    return buf;
+}
+static void ui_dump(uint8_t *c, int depth, int maxdepth) {
+    if (!c || depth > maxdepth) return;
+    char nm[96];
+    log_line("ui %*s%s x %.0f y %.0f w %.0f h %.0f dock %d (%.0f, %.0f) %s kids %u", depth * 2, "", ui_name(c, nm, sizeof nm), UI_X(c),
+             UI_Y(c), ui_w(c), ui_h(c), *(int32_t *)(c + 0x1a0), *(float *)(c + 0x1a4), *(float *)(c + 0x1a8),
+             ui_is_visible(c, 0) ? "shown" : "hidden", UI_KIDS(c));
+    uint32_t n = UI_KIDS(c);
+    if (n > 40) return;
+    for (uint32_t i = 0; i < n; i++) ui_dump(UI_KID(c, i), depth + 1, maxdepth);
+}
+// test command "uidump <name>" (ATTILA_TEST_CMD_FILE): the tree of the first interface part with that name, from the root
+void test_ui_dump(const char *name) {
+    uint8_t *root = *(uint8_t **)0x51632d8;   // TWUI::Component::m_Root
+    uint8_t *c = root ? ui_find(root, name) : NULL;
+    log_line("test command: uidump %s: %s", name, c ? "found" : "not found");
+    if (c) ui_dump(c, 0, 12);
+}
+static int ui_holds(uint8_t *outer, uint8_t *c) { for (int i = 0; c && i < 64; i++, c = *(uint8_t **)(c + 0x108)) if (c == outer) return 1; return 0; }
+// moves a component down by dy: a docked one through its dock offset (the engine places it from that), others in their parent
+static void ui_shift(uint8_t *c, float dy) {
+    if (*(int32_t *)(c + 0x1a0)) {
+        float off[2] = {*(float *)(c + 0x1a4), *(float *)(c + 0x1a8) + dy};
+        ui_set_dock_offset(c, off);
+    } else ui_move(c, *(float *)(c + 0x120), *(float *)(c + 0x124) + dy);
+}
+// makes a component taller, its top edge where it was (a centre- or bottom-docked one would grow both ways / upwards)
+static void ui_taller(uint8_t *c, float dh) {
+    float y0 = UI_Y(c);
+    uint8_t was_w = c[0x190], was_h = c[0x191];
+    c[0x190] = c[0x191] = 1;
+    ui_resize_fn(c, ui_w(c), ui_h(c) + dh, 0, 0);
+    c[0x190] = was_w; c[0x191] = was_h;
+    if (UI_Y(c) != y0) ui_shift(c, y0 - UI_Y(c));
+}
+static uint8_t *g_room_keep[4];
+static int g_room_nkeep, g_room_moves;
+static int room_kept(uint8_t *k) { for (int i = 0; i < g_room_nkeep; i++) if (k == g_room_keep[i]) return 1; return 0; }
+static int room_holds_kept(uint8_t *k) { for (int i = 0; i < g_room_nkeep; i++) if (ui_holds(k, g_room_keep[i])) return 1; return 0; }
+// Under c: what starts at or below the line moves down by add; what reaches across it (or holds a kept list) grows by add and
+// is looked into. before[] = c's children's y before c itself grew (children docked to its bottom moved with it already).
+static void room_walk(uint8_t *c, float line, float add, int depth, const float *before) {
+    uint32_t n = UI_KIDS(c);
+    if (!n || n > 200 || depth > 12) return;
+    for (uint32_t i = 0; i < n; i++) {
+        uint8_t *k = UI_KID(c, i);
+        if (!k) continue;
+        float y = UI_Y(k), h = ui_h(k);
+        if (before) {
+            float want = before[i] < line - 2.0f ? before[i] : before[i] + add;
+            if (y != want) { ui_shift(k, want - y); y = want; }
+            if (before[i] >= line - 2.0f) { g_room_moves++; continue; }
+        }
+        if (room_kept(k)) continue;                    // the lists themselves: the caller makes them taller
+        int holds = room_holds_kept(k), spans = y < line - 2.0f && y + h > line + 2.0f;
+        if (y >= line - 2.0f && !holds) { ui_shift(k, add); g_room_moves++; continue; }
+        if (!spans && !holds) continue;                // wholly above the line
+        float snap[200];
+        uint32_t kn = UI_KIDS(k);
+        int ns = kn <= 200 ? (int)kn : 0;
+        for (int j = 0; j < ns; j++) snap[j] = UI_KID(k, j) ? UI_Y(UI_KID(k, j)) : 0.0f;
+        if (spans) { ui_taller(k, add); g_room_moves++; }
+        room_walk(k, line, add, depth + 1, spans && ns ? snap : NULL);
+    }
+}
+static int g_ui_dump = -1, g_screens_off, g_screens_shot = -1;
+void test_shot_now(void);
+static void screens_dump(uint8_t *root, const char *what) {
+    if (g_ui_dump < 0) g_ui_dump = getenv("ATTILA_UI_DUMP") != NULL;
+    if (g_screens_shot < 0) g_screens_shot = getenv("ATTILA_TEST_SHOT_SCREENS") != NULL;
+    if (g_screens_shot && strstr(what, "after")) test_shot_now();   // test picture of the screen as soon as it is drawn
+    if (!g_ui_dump || !root) return;
+    log_line("ui tree of the %s:", what);
+    ui_dump(root, 0, 9);
+}
+// Battle loading screen: in multiplayer battles the game hides the side boxes and shows each side's armies only as faction
+// icons at the top (the two rows of patch_loading_screen_eight); this hook only logs the tree and takes the test picture.
+static SYSV void (*g_ls_create_orig)(void *, const void *);
+static SYSV void loading_screen_create(void *self, const void *init) {
+    g_ls_create_orig(self, init);
+    screens_dump(*(uint8_t **)((uint8_t *)self + 8), "battle loading screen (after)");
+}
+// Results screen (measured, vanilla, 8 v 8, layout units 1440 x 900): "middle_frame" (y 20..683) holds the two sides one above
+// the other; each side's "team_clip_box" is 184 high = 4 rows of 46 ("team_entry" + "army_entry" rows placed 46 apart), so
+// rows 5-8 of a side were cut off or drawn over the other side. Under it: battle time, then "bottom_parent" with the battle tip
+// (y 682..850) and "button_continue" (y 851). Now each clip box grows to fit its rows and everything under it moves down; if
+// 8 + 8 rows at full height would not end above the Continue button, the rows get shorter (scaled, at least 26) so they do,
+// and the battle tip (not needed on this screen) is hidden where the grown panel covers it. Up to 4 a side: no change.
+static int clip_rows(uint8_t *clip, uint8_t **rows, int max) {
+    int n = 0;
+    uint32_t k = UI_KIDS(clip);
+    for (uint32_t i = 0; i < k && k <= 64 && n < max; i++) { uint8_t *r = UI_KID(clip, i); if (r && ui_is_visible(r, 0)) rows[n++] = r; }
+    return n;
+}
+static SYSV void (*g_rs_create_orig)(void *, const void *);
+static SYSV void results_screen_create(void *self, const void *init) {
+    g_rs_create_orig(self, init);
+    uint8_t *root = *(uint8_t **)((uint8_t *)self + 8), *side[2] = {*(uint8_t **)((uint8_t *)self + 0xb8), *(uint8_t **)((uint8_t *)self + 0xc0)};
+    screens_dump(root, "results screen (before)");
+    if (!root || g_screens_off || !*(void **)((uint8_t *)self + 0xa0)) { screens_dump(root, "results screen (after)"); return; }
+    uint8_t *clip[2] = {NULL, NULL}, *rows[2][32];
+    int n[2] = {0, 0}, ntot = 0;
+    float rh = 0.0f, clip_h = 0.0f;
+    for (int s = 0; s < 2; s++) {
+        if (!side[s] || !(clip[s] = ui_find(side[s], "team_clip_box"))) continue;
+        n[s] = clip_rows(clip[s], rows[s], 32);
+        if (!n[s]) { clip[s] = NULL; continue; }
+        ntot += n[s]; clip_h += ui_h(clip[s]);
+        if (ui_h(rows[s][0]) > rh) rh = ui_h(rows[s][0]);
+    }
+    float grow46 = 0.0f;
+    for (int s = 0; s < 2; s++) if (clip[s] && n[s] * rh + 4.0f > ui_h(clip[s])) grow46 += n[s] * rh + 4.0f - ui_h(clip[s]);
+    if (!ntot || rh < 10.0f || grow46 <= 1.0f) { screens_dump(root, "results screen (after)"); return; }
+    // the panel that holds both sides (child of the screen-sized "docker") and the lowest line it may reach
+    uint8_t *mf = NULL, *docker = NULL;
+    for (uint8_t *c = clip[0] ? clip[0] : clip[1]; c; c = *(uint8_t **)(c + 0x108)) {
+        uint8_t *p = *(uint8_t **)(c + 0x108);
+        if (p && *(uint8_t **)(p + 0x108) == root) { mf = c; docker = p; break; }
+    }
+    if (!mf) { log_line("results screen: layout not as expected, nothing changed"); return; }
+    uint8_t *cont = ui_find(root, "button_continue");
+    float limit = (cont ? UI_Y(cont) : UI_Y(docker) + ui_h(docker)) - 6.0f, mf_bottom = UI_Y(mf) + ui_h(mf);
+    float r = rh;
+    if (mf_bottom + grow46 > limit) {
+        int sides = (clip[0] != NULL) + (clip[1] != NULL);
+        r = (float)(int)((limit - mf_bottom + clip_h - 4.0f * sides) / ntot);
+        if (r > rh) r = rh;
+        if (r < 26.0f) r = 26.0f;
+    }
+    if (r < rh - 0.5f)   // shorter rows: each row and what is in it scaled down, placed r apart
+        for (int s = 0; s < 2; s++)
+            for (int i = 0; clip[s] && i < n[s]; i++) {
+                uint8_t *w = rows[s][i], was_w = w[0x190], was_h = w[0x191];
+                w[0x190] = w[0x191] = 1;
+                ui_resize_fn(w, ui_w(w), r, 1, 1);
+                w[0x190] = was_w; w[0x191] = was_h;
+                ui_move(w, *(float *)(w + 0x120), (float)i * r);
+            }
+    // make room: the lower side first, each clip box with its own line
+    g_room_moves = 0;
+    int lo = clip[0] && clip[1] ? (UI_Y(clip[0]) > UI_Y(clip[1]) ? 0 : 1) : (clip[0] ? 0 : 1), order[2] = {lo, 1 - lo};
+    float total = 0.0f;
+    for (int j = 0; j < 2; j++) {
+        int s = order[j];
+        if (!clip[s]) continue;
+        float need = n[s] * r + 4.0f - ui_h(clip[s]);
+        if (need <= 1.0f) continue;
+        g_room_keep[0] = clip[s]; g_room_nkeep = 1;
+        room_walk(docker, UI_Y(clip[s]) + ui_h(clip[s]) - 2.0f, need, 0, NULL);
+        ui_taller(clip[s], need);
+        total += need;
+    }
+    // the bottom part (battle tip, loading bar, Continue) stays where the game put it: the walk moved it down with the rest,
+    // off the bottom of the screen (user's 2026-11-22 test: loading bar and Continue not seen)
+    uint8_t *bottom = ui_find(root, "bottom_parent");
+    if (bottom && total > 0.5f) ui_shift(bottom, -total);
+    // the battle tip under the panel: hidden where the grown panel now covers it
+    float new_bottom = UI_Y(mf) + ui_h(mf);
+    uint8_t *tip_parts[2] = {ui_find(root, "panel_parchment"), ui_find(root, "quote")};
+    int hid = 0;
+    for (int i = 0; i < 2; i++) if (tip_parts[i] && UI_Y(tip_parts[i]) < new_bottom) { ui_set_visible(tip_parts[i], 0); hid++; }
+    log_line("results screen: %d + %d army rows, rows %.0f high (game: %.0f), panel %.0f taller, %d parts moved or stretched%s",
+             n[0], n[1], r, rh, total, g_room_moves, hid ? ", battle tip hidden" : "");
+    screens_dump(root, "results screen (after)");
+}
+static int vtable_hook(uintptr_t vt, uintptr_t want, void *fn, void **orig, const char *what) {
+    uintptr_t *v = (uintptr_t *)vt;
+    int at = -1;
+    for (int i = 0; i < 80; i++) if (v[i] == want) { if (at >= 0) { at = -2; break; } at = i; }
+    if (at < 0) { log_line("patch skipped, game code differs: %s", what); return 0; }
+    DWORD was;
+    if (!VirtualProtect(&v[at], 8, PAGE_READWRITE, &was)) { log_line("patch skipped, vtable not writable: %s", what); return 0; }
+    *orig = (void *)v[at];
+    v[at] = (uintptr_t)fn;
+    VirtualProtect(&v[at], 8, was, &was);
+    return 1;
+}
+// Unit stats panel (UIDLL::UnitInformationPanelCallback, "Unit Info" in battle set-up and in battle): InitStatistics fills the
+// list "dynamic_stats" (+308h) row by row and makes it as high as all rows in ONE column (rows x row height). 1212AD's layout
+// (1-1212scripts.pack ui\common ui\unit_information) places stat1..stat8 in two columns 214 apart while each row is 294 wide,
+// so the second column lay over the first (user's 2026-11-22 report; measured hidden: list 293 x 240 for 10 rows, rows at
+// x +0 / +214). After InitStatistics: if two shown rows overlap, the shown rows go one under the other at the first row's x,
+// in their order - one column, as in vanilla Attila. Layouts whose rows do not overlap are left alone. Display only.
+static SYSV void (*const g_unit_stats_init)(void *) = (SYSV void (*)(void *))(uintptr_t)0x2a2b6f0;
+// Two columns (user's 2026-11-24 wish): melee stats on the left (Melee Attack / Damage / Defence, Charge Bonus, Attack Against
+// Cavalry), the rest on the right. A row (stat_name 150 + dy_value 40 + bar_frame 90 = 294) is too wide for half the panel, so
+// each stat becomes a cell of two lines: name with its value at the right end (the value is right-aligned), the bar under them
+// stretched to the cell's width. The columns use 1.3 x the list's width, centred on it (the parchment around the list has the
+// room). The game re-sets bar fill widths (hover / compare) in its own 90-wide scale: we note every width we wrote, and a width
+// that differs from ours is the game's and is scaled again. Not two columns (one column, as before) when: a label cannot be
+// read, all stats fall in one group, or a column would need cells under 30 high in the list's height. Display only.
+typedef struct { void *c; float v; uint32_t used; } UsMark;
+static UsMark g_us_mark[1024];
+static int g_us_nmark;
+static uint32_t g_us_clock;
+static float us_abs(float a) { return a < 0 ? -a : a; }
+static int us_mark_get(void *c, float *v) {
+    for (int i = 0; i < g_us_nmark; i++)
+        if (g_us_mark[i].c == c) { g_us_mark[i].used = ++g_us_clock; if (v) *v = g_us_mark[i].v; return 1; }
+    return 0;
+}
+static void us_mark_set(void *c, float v) {
+    int at = -1;
+    for (int i = 0; i < g_us_nmark && at < 0; i++) if (g_us_mark[i].c == c) at = i;
+    if (at < 0 && g_us_nmark < 1024) at = g_us_nmark++;
+    if (at < 0) { at = 0; for (int i = 1; i < 1024; i++) if (g_us_mark[i].used < g_us_mark[at].used) at = i; }   // full: the longest unused (old panels)
+    g_us_mark[at].c = c; g_us_mark[at].v = v; g_us_mark[at].used = ++g_us_clock;
+}
+static void us_size(uint8_t *c, float w, float h) {
+    if (us_abs(ui_w(c) - w) < 0.5f && us_abs(ui_h(c) - h) < 0.5f) return;
+    float x = *(float *)(c + 0x120), y = *(float *)(c + 0x124);
+    uint8_t was_w = c[0x190], was_h = c[0x191];
+    c[0x190] = c[0x191] = 1;
+    ui_resize_fn(c, w, h, 0, 0);
+    c[0x190] = was_w; c[0x191] = was_h;
+    if (*(float *)(c + 0x120) != x || *(float *)(c + 0x124) != y) ui_move(c, x, y);
+}
+static void us_place(uint8_t *c, float x, float y) {
+    if (us_abs(*(float *)(c + 0x120) - x) > 0.25f || us_abs(*(float *)(c + 0x124) - y) > 0.25f) ui_move(c, x, y);
+}
+static int us_label_melee(uint8_t *name) {   // 1 melee, 0 other, -1 no text. TWUI::Component::GetStateText = state +50h (UniString)
+    uint8_t *st = *(uint8_t **)(name + 0x140);
+    if (!st) return -1;
+    uint32_t len = *(uint32_t *)(st + 0x50);
+    const uint16_t *t = *(const uint16_t *const *)(st + 0x58);
+    if (!t || !len || len > 200) return -1;
+    char a[201];
+    for (uint32_t i = 0; i < len; i++) a[i] = t[i] < 128 ? (char)(t[i] >= 'A' && t[i] <= 'Z' ? t[i] + 32 : t[i]) : '?';
+    a[len] = 0;
+    return strstr(a, "melee") || strstr(a, "charge") || strstr(a, "cavalry") ? 1 : 0;
+}
+// a fill / marker inside the bar: the game's value (any value that is not the one we wrote). The game works it out from the
+// bar's width at that moment: a value written while the bar was still the game's own width (bar0) is scaled up by k; one written
+// after we widened the bar is already in our width (user's 2026-11-24 picture: scaling those again made every bar full).
+static void us_scale_w(uint8_t *c, float k, float most, int widened) {   // most: the bar's width (a value over the top end is cut)
+    float mine, w = ui_w(c);
+    if (us_mark_get(c, &mine) && us_abs(mine - w) < 0.25f) return;
+    if (widened) k = 1.0f;
+    us_size(c, w * k < most ? w * k : most, ui_h(c));
+    us_mark_set(c, ui_w(c));
+    static int told;
+    if (widened && told++ < 5) log_line("unit stats: the game set a bar fill to %.0f in the widened bar (kept, not scaled)", w);
+}
+static void us_scale_x(uint8_t *c, float k, int widened) {
+    float mine, x = *(float *)(c + 0x120);
+    if (us_mark_get(c, &mine) && us_abs(mine - x) < 0.25f) return;
+    if (!widened) us_place(c, x * k, *(float *)(c + 0x124));
+    us_mark_set(c, *(float *)(c + 0x120));
+}
+// the room under the list: the top of the nearest shown part below the list's top (in the list's parents, not inside the list),
+// e.g. the ability icons; 0 = nothing found
+static float us_room_below(uint8_t *list) {
+    float top = UI_Y(list), lx = UI_X(list) - ui_w(list) * 0.2f, rx = UI_X(list) + ui_w(list) * 1.2f, best = 0;
+    uint8_t *p = list;
+    for (int up = 0; up < 3; up++) {
+        uint8_t *par = *(uint8_t **)(p + 0x108);
+        if (!par) break;
+        for (uint32_t i = 0; i < UI_KIDS(par) && i < 200; i++) {
+            uint8_t *s = UI_KID(par, i);
+            if (!s || s == p || ui_holds(s, list) || !ui_is_visible(s, 0)) continue;
+            float sy = UI_Y(s), sh = ui_h(s);
+            if (sy <= top + 8.0f || sh < 4.0f || UI_X(s) > rx || UI_X(s) + ui_w(s) < lx) continue;
+            if (best == 0 || sy - top < best) best = sy - top;
+        }
+        p = par;
+    }
+    return best;
+}
+static int unit_stats_two_columns(uint8_t *list, uint8_t **rows, int n) {
+    if (getenv("ATTILA_STATS_ONE_COLUMN")) return 0;
+    static float bar0;   // the game's bar width (90 in 1212AD's layout), read once from a bar we have not touched
+    uint8_t *nm[64], *val[64], *bar[64];
+    int side[64], cnt[2] = {0, 0};
+    for (int i = 0; i < n; i++) {
+        nm[i] = ui_find(rows[i], "stat_name"); val[i] = ui_find(rows[i], "dy_value"); bar[i] = ui_find(rows[i], "bar_frame");
+        if (!nm[i] || !val[i] || !bar[i]) return 0;
+        side[i] = us_label_melee(nm[i]);
+        if (side[i] < 0) return 0;
+        cnt[side[i] ? 0 : 1]++;
+        if (bar0 < 1.0f && !us_mark_get(bar[i], NULL) && ui_w(bar[i]) > 10.0f) bar0 = ui_w(bar[i]);
+    }
+    if (!cnt[0] || !cnt[1] || bar0 < 1.0f) return 0;
+    // balance (user's 2026-11-24 picture: 4 left, 8 right, the last one under the ability icons): while the right column is
+    // longer by 2 or more, its last stat goes to the bottom of the left column (melee stats stay at the top on the left)
+    int moved = 0;
+    while (cnt[1] - cnt[0] >= 2) {
+        int last = -1;
+        for (int i = 0; i < n; i++) if (side[i] == 0) last = i;
+        if (last < 0) break;
+        side[last] = 2;   // 2 = other stat shown on the left, after the melee ones
+        cnt[1]--; cnt[0]++; moved++;
+    }
+    float lw = ui_w(list), lh = ui_h(list), gap = 14.0f, room = us_room_below(list);
+    if (room > 30.0f && room - 4.0f < lh) lh = room - 4.0f;   // never down into the parts under the list
+    float row_h = ui_h(val[0]) > 10.0f ? ui_h(val[0]) : 24.0f, bar_h = ui_h(bar[0]) > 2.0f ? ui_h(bar[0]) : 10.0f;
+    float cell = row_h + bar_h + 4.0f, most = (float)(cnt[0] > cnt[1] ? cnt[0] : cnt[1]);
+    if (most * cell > lh + 0.5f) cell = lh / most;
+    if (cell < 28.0f || lw < 100.0f) return 0;
+    float col = (lw * 1.3f - gap) * 0.5f, left = -lw * 0.15f, bar_y = row_h - 2.0f, k = col / bar0;
+    if (cell < row_h + bar_h) bar_y = cell - bar_h - 1.0f;
+    float y[2] = {0, 0};
+    for (int pass = 0; pass < 3; pass++)   // left: melee (1), then moved others (2); right: others (0)
+        for (int i = 0; i < n; i++) {
+            if (side[i] != (pass == 0 ? 1 : pass == 1 ? 2 : 0)) continue;
+            int c = pass == 2 ? 1 : 0;
+            int widened = us_mark_get(bar[i], NULL) && us_abs(ui_w(bar[i]) - col) < 0.5f;   // the bar was already ours
+            us_size(rows[i], col, cell);
+            us_place(rows[i], left + c * (col + gap), y[c]);
+            y[c] += cell;
+            us_mark_set(rows[i], col);
+            us_size(nm[i], col, row_h);              us_place(nm[i], 0, 0);
+            us_size(val[i], ui_w(val[i]), row_h);    us_place(val[i], col - ui_w(val[i]), 0);
+            us_size(bar[i], col, bar_h);             us_place(bar[i], 0, bar_y);
+            us_mark_set(bar[i], col);
+            for (uint32_t j = 0; j < UI_KIDS(bar[i]) && j < 16; j++) {
+                uint8_t *b = UI_KID(bar[i], j);
+                char kn[96];
+                ui_name(b, kn, sizeof kn);
+                if (!strcmp(kn, "frame") || !strcmp(kn, "bar_border")) us_size(b, col, ui_h(b));
+                else if (!strcmp(kn, "icon_compare")) us_scale_x(b, k, widened);
+                else us_scale_w(b, k, col, widened);     // bar_base, bar_mod: the fill
+            }
+        }
+    static int told;
+    if (told++ < 3) log_line("unit stats: two columns, %d left (%d of them not melee), %d right (cells %.0f x %.0f, list %.0f x %.0f, room below %.0f)",
+                             cnt[0], moved, cnt[1], col, cell, lw, ui_h(list), room);
+    return 1;
+}
+static void unit_stats_one_column(void *self) {
+    uint8_t *list = *(uint8_t **)((uint8_t *)self + 0x308), *rows[64];
+    if (!list) return;
+    int n = 0, overlap = 0;
+    uint32_t k = UI_KIDS(list);
+    for (uint32_t i = 0; i < k && k <= 64; i++) { uint8_t *r = UI_KID(list, i); if (r && ui_is_visible(r, 0)) rows[n++] = r; }
+    for (int i = 0; i < n && !overlap; i++)
+        for (int j = i + 1; j < n; j++) {
+            uint8_t *a = rows[i], *b = rows[j];
+            if (UI_X(a) < UI_X(b) + ui_w(b) - 1.0f && UI_X(b) < UI_X(a) + ui_w(a) - 1.0f && UI_Y(a) < UI_Y(b) + ui_h(b) - 1.0f &&
+                UI_Y(b) < UI_Y(a) + ui_h(a) - 1.0f) { overlap = 1; break; }
+        }
+    if (!overlap && !us_mark_get(rows[0], NULL)) return;   // our own two columns: run again so bars the game re-set get our width
+    if (unit_stats_two_columns(list, rows, n)) return;
+    if (!overlap) return;
+    float x0 = *(float *)(rows[0] + 0x120), y0 = *(float *)(rows[0] + 0x124), y = y0;
+    for (int i = 0; i < n; i++) { ui_move(rows[i], x0, y); y += ui_h(rows[i]); }
+    static int told;
+    if (told++ < 3) log_line("unit stats: %d rows overlapped (two columns narrower than a row): put in one column", n);
+}
+static SYSV void unit_stats_init(void *self) {
+    g_unit_stats_init(self);
+    unit_stats_one_column(self);
+}
+// Hovering a unit card re-places the rows by another way (user's 2026-11-22 report: two columns again on hover), so the
+// check also runs after the panel's OnUpdatePulse (vtable 3b0c2b0); it only moves rows that overlap.
+static SYSV void (*g_unit_stats_pulse_orig)(void *, uint32_t);
+static SYSV void unit_stats_pulse(void *self, uint32_t t) {
+    g_unit_stats_pulse_orig(self, t);
+    unit_stats_one_column(self);
+}
+static void patch_unit_stats_column(void) {
+    static const uintptr_t calls[2] = {0x2a2a4b4, 0x2a2d5c7};   // UnitInformationPanelCallback::InitialisePanel, ::RefreshStats
+    for (int i = 0; i < 2; i++) {
+        uint8_t *c = (uint8_t *)calls[i];
+        int32_t want = (int32_t)(0x2a2b6f0 - (calls[i] + 5));
+        if (c[0] != 0xE8 || memcmp(c + 1, &want, 4)) { log_line("patch skipped, game code differs: unit stats in one column"); return; }
+    }
+    uint8_t *s = near_game_code(16);
+    if (!s) { log_line("patch skipped, no memory near the game: unit stats in one column"); return; }
+    s[0] = 0x48; s[1] = 0xB8; { uint64_t fn = (uint64_t)unit_stats_init; memcpy(s + 2, &fn, 8); }   // mov rax,fn
+    s[10] = 0xFF; s[11] = 0xE0;                                                                       // jmp rax
+    for (int i = 0; i < 2; i++) { uint8_t *c = (uint8_t *)calls[i]; int32_t r = (int32_t)(s - (c + 5)); memcpy(c + 1, &r, 4); }
+    vtable_hook(0x3b0c2b0, 0x2a2dcd0, (void *)unit_stats_pulse, (void **)&g_unit_stats_pulse_orig, "unit stats in one column (pulse)");
+    log_line("patch applied: unit stats panel rows that overlap go in one column");
+}
+static void patch_battle_screens_room(void) {
+    if (getenv("ATTILA_NO_8V8")) return;
+    g_screens_off = getenv("ATTILA_NO_8V8_SCREENS") != NULL;   // the screens' own look (with ATTILA_UI_DUMP their trees still go to the log)
+    if (g_screens_off) log_line("8v8 battle screens: off (ATTILA_NO_8V8_SCREENS)");
+    int a = vtable_hook(0x3b36f60, 0x2b5a740, (void *)loading_screen_create, (void **)&g_ls_create_orig, "battle loading screen room for 8 a side");
+    int b = vtable_hook(0x3b37460, 0x2b5c6e0, (void *)results_screen_create, (void **)&g_rs_create_orig, "results screen room for 8 a side");
+    if (a || b) log_line("patch applied: battle loading screen%s%s make room for 8 armies a side", a && b ? " and results screen" : "", a && b ? "" : " (one of them only)");
+}
+
 // Battle loading screen: each side shows its armies' faction icons in "mon0".."mon3" only, the game's own 4 a side. With more
 // armies UIDLL::BattleLoadingScreenPanel::SetupAllianceFactionFlags also asks for "mon4" and on, gets no component back and
 // SetComponentTexture crashes on it (seen in Test 13, 8 attackers). Skip an icon that has no place. Display only: UI code.
@@ -1118,5 +1548,7 @@ static void patch_loading_screen_icons(void) {
     at[0] = 0xE9; memcpy(at + 1, &r, 4);
     log_line("patch applied: battle loading screen skips faction icons it has no place for");
     patch_loading_screen_eight();
+    patch_battle_screens_room();
+    patch_unit_stats_column();
 }
 

@@ -893,6 +893,7 @@ static LONG WINAPI unhandled_note(EXCEPTION_POINTERS *ep) {
 
 #include "settings_copy.inc"
 #include "graphics_choice.inc"
+#include "self_update.inc"
 
 int main(int argc, char **argv) {
     // Two ways to start:
@@ -918,6 +919,17 @@ int main(int argc, char **argv) {
         char *s = strrchr(own_dir, '\\');
         if (s) *s = 0;
         snprintf(own_game, sizeof own_game, "%s\\Attila", own_dir);
+        {   // a newer version from our Workshop item (self_update.inc): before the start window, so it is the new one
+            int code = self_update(own_dir);
+            if (code >= 0) return code;
+            if (getenv("ATTILA_TEST_SELF_UPDATE_ONLY")) {   // test: write the outcome next to the exe and stop
+                char p[MAX_PATH + 32];
+                snprintf(p, sizeof p, "%s\\self_update_test.txt", own_dir);
+                FILE *f = fopen(p, "w");
+                if (f) { fprintf(f, "%s\n%s\n", APP_VERSION_TEXT, g_update_note); fclose(f); }
+                return 0;
+            }
+        }
         // the game folder is the one above ours, unless a test says otherwise
         char work[MAX_PATH];
         const char *over = getenv("ATTILA_GAME_DIR");
@@ -968,9 +980,33 @@ int main(int argc, char **argv) {
             char pattern[MAX_PATH];
             snprintf(pattern, sizeof pattern, "%s\\*.pack", packs);
             HANDLE h = FindFirstFileA(pattern, &fd);
+            // The waving-flags pack for 1212 AD (packs\1212\!!1212ad_flag_wave.pack: 1212's banner and pennant models with the
+            // cloth data of JGdaCaesar's Flag Wave, made by mk1212_flags\build_flags.ps1): first of all, so it wins over
+            // 1212's own copies, and only when the player's list has a 1212 pack and the engine fix and the flags are ticked.
+            static char flagdir[MAX_PATH];
+            int flags = 0;
+            {
+                extern int settings_perf_fix(void), settings_flag_wave(void);
+                char fp[MAX_PATH + 40];
+                snprintf(flagdir, sizeof flagdir, "%s\\1212", packs);
+                snprintf(fp, sizeof fp, "%s\\!!1212ad_flag_wave.pack", flagdir);
+                if (have_list && settings_perf_fix() && settings_flag_wave() && GetFileAttributesA(fp) != INVALID_FILE_ATTRIBUTES) {
+                    FILE *u = fopen(list, "r");
+                    char line[1024];
+                    if (u) {
+                        while (!flags && fgets(line, sizeof line, u))
+                            if (!strncmp(line, "mod ", 4) && strstr(line, "1212") && !strstr(line, "!!1212ad_flag_wave")) flags = 1;
+                        fclose(u);
+                    }
+                }
+                log_line(flags ? "1212 AD in the mod list: its waving-flags pack goes in first (packs\\1212)" : "waving-flags pack for 1212 AD: not loaded (%s)",
+                         !have_list ? "no mod list" : GetFileAttributesA(fp) == INVALID_FILE_ATTRIBUTES ? "not installed" :
+                         !settings_perf_fix() || !settings_flag_wave() ? "unticked in the start window" : "no 1212 pack in the mod list");
+            }
             if (h != INVALID_HANDLE_VALUE || have_list) {
                 FILE *f = fopen("used_mods_64.tmp", "w");
                 if (f) {
+                    if (flags) fprintf(f, "add_working_directory \"%s\";\nmod \"!!1212ad_flag_wave.pack\";\n", flagdir);
                     if (h != INVALID_HANDLE_VALUE) {
                         fprintf(f, "add_working_directory \"%s\";\n", packs);
                         do fprintf(f, "mod \"%s\";\n", fd.cFileName); while (FindNextFileA(h, &fd));
@@ -978,7 +1014,7 @@ int main(int argc, char **argv) {
                     if (have_list) {   // then the player's own list, unchanged
                         FILE *u = fopen(list, "r");
                         char line[1024];
-                        if (u) { while (fgets(line, sizeof line, u)) fputs(line, f); fclose(u); }
+                        if (u) { while (fgets(line, sizeof line, u)) if (!flags || !strstr(line, "!!1212ad_flag_wave")) fputs(line, f); fclose(u); }
                     }
                     int ok = fclose(f) == 0;
                     if (ok && MoveFileExA("used_mods_64.tmp", "used_mods_64.txt", MOVEFILE_REPLACE_EXISTING)) { own_argv[3] = list_arg; argc = 4; }
@@ -1014,6 +1050,7 @@ int main(int argc, char **argv) {
     g_log = fopen(logpath, "w");  // logpath now ends in attila64_log.txt
     log_start_writer();
     log_line("64-bit Attila " APP_VERSION_TEXT);   // every log says which version wrote it
+    if (g_update_note[0]) log_line("%s", g_update_note);
     if (g_dpi_percent) log_line("Windows display scaling %u%%; the game's window is %s", g_dpi_percent, g_dpi_own ? "in real pixels" : "left to Windows' scaling");
     {
         char why[600];
@@ -1024,6 +1061,7 @@ int main(int argc, char **argv) {
     copy_normal_graphics_settings();   // before the game reads its settings
     apply_texture_sharpness();         // the start window's choice, also before the game reads its settings
     apply_test_aa();
+    { extern void steam_connect_early(void); steam_connect_early(); }   // Steam overlay: must be loaded before the swap chain is made
     setup_graphics_route();            // before anything loads OpenGL
     // Windows wakes timed waits (SleepConditionVariableSRW behind pthread_cond_timedwait, sem waits, Sleep) only on its timer
     // tick, 15.6 ms unless a program asks for a finer one; Linux wakes them when asked. Test: ask for 0.5 ms, as games do.

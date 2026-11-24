@@ -36,6 +36,41 @@ static const GUID X2_CLSID_WICImagingFactory = {0xcacaf262, 0x9370, 0x4615, {0xa
 static const GUID X2_IID_IWICImagingFactory = {0xec5ec8a9, 0xc395, 0x4314, {0x9c, 0x77, 0x54, 0xd7, 0xa9, 0x35, 0xff, 0x70}};
 static const GUID X2_GUID_32bppBGRA = {0x6fddc324, 0x4e03, 0x4bfe, {0xb1, 0x85, 0x3d, 0x77, 0x76, 0x8d, 0xc9, 0x0f}};
 
+// Where the sharp pictures are, out = folder ending in a backslash: <exe folder>\ui4k\ (hand-installed, tests) first, else the
+// Workshop item with the pictures (shipped apart, about 1 GB, read where Steam puts it, nothing copied): any subscribed item
+// of Attila (steamapps\workshop\content\325610\<id>) holding ui4k\attila64_sharp_ui.txt, so the item number need not be
+// built in. 0 = none.
+static int x2_is_dir(const char *p) {
+    DWORD a = GetFileAttributesA(p);
+    return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+}
+static int x2_find_dir(char *out, size_t size) {
+    char exe[MAX_PATH], p[MAX_PATH * 2];
+    GetModuleFileNameA(NULL, exe, sizeof exe);
+    char *s = strrchr(exe, '\\');
+    if (s) *s = 0;
+    snprintf(p, sizeof p, "%s\\ui4k\\", exe);
+    if (x2_is_dir(p) && strlen(p) < size) { strcpy(out, p); return 1; }
+    char ws[MAX_PATH * 2];
+    snprintf(ws, sizeof ws, "%s\\..\\..\\..\\workshop\\content\\325610", exe);
+    snprintf(p, sizeof p, "%s\\*", ws);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(p, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    int found = 0;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
+        snprintf(p, sizeof p, "%s\\%s\\ui4k\\attila64_sharp_ui.txt", ws, fd.cFileName);
+        if (GetFileAttributesA(p) == INVALID_FILE_ATTRIBUTES) continue;
+        snprintf(p, sizeof p, "%s\\%s\\ui4k\\", ws, fd.cFileName);
+        char full[MAX_PATH * 2];   // without the ..\..\..: picture paths stay short enough for the plain Windows calls
+        DWORD n = GetFullPathNameA(p, sizeof full, full, NULL);
+        if (n && n < size) { strcpy(out, full); found = 1; }
+    } while (!found && FindNextFileA(h, &fd));
+    FindClose(h);
+    return found;
+}
+
 static int x2_active(void) {
     if (g_x2_on >= 0) return g_x2_on;
     if (!g_dx.d || !g_dx.dev) return 0;   // not the DirectX 11 route (yet)
@@ -47,22 +82,17 @@ static int x2_active(void) {
         extern float g_ui_size;
         uint32_t w = DXF(g_dx.dev, 0x1610, uint32_t), h = DXF(g_dx.dev, 0x1614, uint32_t);
         f = g_ui_size > 0 ? g_ui_size : (float)h / 1080.0f;
-        float most = (float)w / 1440.0f < (float)h / 900.0f ? (float)w / 1440.0f : (float)h / 900.0f;
+        float most = (float)w / 1440.0f < (float)h / 1080.0f ? (float)w / 1440.0f : (float)h / 1080.0f;   // never laid out lower than 1080 (interface.inc)
         if (f > most) f = most;
         g_x2_on = f >= 1.5f;
     }
     int no_dir = 0;
     if (g_x2_on) {
-        GetModuleFileNameA(NULL, g_x2_dir, sizeof g_x2_dir);
-        char *s = strrchr(g_x2_dir, '\\');
-        if (s) s[1] = 0;
-        strncat(g_x2_dir, "ui4k\\", sizeof g_x2_dir - strlen(g_x2_dir) - 1);
         // Without the picture folder there is nothing sharp to show, and the pages at twice the size would only cost card
-        // memory: off then (the release of 2026-11-13 ships without the pictures). ATTILA_UI_X2=1 keeps it on for tests.
-        DWORD a = GetFileAttributesA(g_x2_dir);
-        if ((a == INVALID_FILE_ATTRIBUTES || !(a & FILE_ATTRIBUTE_DIRECTORY)) && !(e && *e == '1')) { g_x2_on = 0; no_dir = 1; }
+        // memory: off then. ATTILA_UI_X2=1 keeps it on for tests.
+        if (!x2_find_dir(g_x2_dir, sizeof g_x2_dir) && !(e && *e == '1')) { g_x2_on = 0; no_dir = 1; }
     }
-    log_line("sharp interface: %s (interface zoom %.2f%s; sharp pictures from %s)", g_x2_on ? "on" : no_dir ? "off, no ui4k folder next to the game" : "off", (double)f, e ? ", set by ATTILA_UI_X2" : "", g_x2_on ? g_x2_dir : "-");
+    log_line("sharp interface: %s (interface zoom %.2f%s; sharp pictures from %s)", g_x2_on ? "on" : no_dir ? "off, no sharp pictures (ui4k folder next to the game, or the Workshop item 64-bit Attila Sharp 4K Interface)" : "off", (double)f, e ? ", set by ATTILA_UI_X2" : "", g_x2_on ? g_x2_dir : "-");
     return g_x2_on;
 }
 

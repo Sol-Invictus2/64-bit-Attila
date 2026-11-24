@@ -12,6 +12,8 @@ void *standin_steam_object(int index);
 extern void sysv_to_ms_common(void);
 
 // Same as the common bridge, for methods returning a class: this, hidden result pointer, then up to 4 arguments.
+// Windows (MSVC) member functions return every class or struct through a hidden pointer, whatever its size; Linux returns one
+// of up to 16 bytes in rax (first 8 bytes) and rdx (the rest). So the result is read back as 16 bytes: 0x30 -> rax, 0x38 -> rdx.
 __asm__(".text\n"
         ".globl sysv_to_ms_retclass\n"
         "sysv_to_ms_retclass:\n"
@@ -19,6 +21,7 @@ __asm__(".text\n"
         "mov %rsp, %rbp\n"
         "sub $0x40, %rsp\n"
         "movq $0, 0x30(%rsp)\n"
+        "movq $0, 0x38(%rsp)\n"
         "mov %rcx, 0x20(%rsp)\n"
         "mov %r8, 0x28(%rsp)\n"
         "mov %rdx, %r9\n"
@@ -27,6 +30,7 @@ __asm__(".text\n"
         "mov %rdi, %rcx\n"
         "call *%rax\n"
         "mov 0x30(%rsp), %rax\n"
+        "mov 0x38(%rsp), %rdx\n"
         "leave\n"
         "ret\n");
 extern void sysv_to_ms_retclass(void);
@@ -116,6 +120,11 @@ static const SlotRule g_rules[] = {
     {"SteamMatchMaking009", 20, 20, K_LOBBY_LOG},
     // SteamMatchMaking: GetLobbyByIndex, GetLobbyMemberByIndex, GetLobbyOwner
     {"SteamMatchMaking009", 12, 12, K_RETCLASS}, {"SteamMatchMaking009", 18, 18, K_RETCLASS}, {"SteamMatchMaking009", 35, 35, K_RETCLASS},
+    // SteamController (only used with a game controller connected): GetDigitalActionData (2-byte result) and GetAnalogActionData
+    // (13 bytes). Slot order checked against the game's own calls (Init 0, Shutdown 1, RunFrame 2, GetConnectedControllers 3,
+    // ShowBindingPanel 4, GetActionSetHandle 5, ActivateActionSet 6, GetDigitalActionHandle 8, GetAnalogActionHandle 11).
+    // Without these Steam took the controller handle for the result address and crashed (player log 2026-11-24, 1.3.18).
+    {"SteamController003", 9, 9, K_RETCLASS}, {"SteamController003", 12, 12, K_RETCLASS},
     // GameServer: GetSteamID, CreateUnauthenticatedUserConnection
     {"SteamGameServer012", 10, 10, K_RETCLASS}, {"SteamGameServer012", 25, 25, K_RETCLASS},
     // RemoteStorage: FileWrite, FileWriteAsync, FileForget, FileDelete, FileWriteStreamOpen / WriteChunk / Close
@@ -307,6 +316,16 @@ static int connect_steam(void) {
     return g_client != NULL;
 }
 SHIM(int, SteamAPI_Init, (void)) { return connect_steam(); }
+// Called by loader.c before the game makes its window and DirectX 11 swap chain. SteamAPI_Init is what loads Steam's
+// overlay (gameoverlayrenderer64.dll) into the process, and the overlay only hooks swap chains made AFTER it is loaded
+// (it wraps CreateDXGIFactory / CreateSwapChainForHwnd). The game itself asks for Steam only after its swap chain is made,
+// so the overlay stayed dark (Shift+Tab did nothing; found 2026-11-22 with Steam\logs\gameoverlay_renderer.txt and a probe
+// program). Same connect as the game's own; the game's later SteamAPI_Init gets the stored answer.
+void steam_connect_early(void) {
+    if (getenv("ATTILA_STEAM_LATE")) { log_line("Steam: connect left to the game (ATTILA_STEAM_LATE, test)"); return; }
+    log_line("Steam: connecting before the game's graphics start (for the Steam overlay)");
+    connect_steam();
+}
 // Never let Steam restart "the real game": that would launch the 32-bit Windows Attila instead of this one.
 SHIM(int, SteamAPI_RestartAppIfNecessary, (unsigned app)) { return 0; }
 SHIM(void, SteamAPI_Shutdown, (void)) { if (g_dll) ((void (*)(void))steam_fn("SteamAPI_Shutdown"))(); }

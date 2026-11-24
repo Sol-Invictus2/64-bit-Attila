@@ -1,5 +1,5 @@
 64-BIT ATTILA
-(version 1.3.7)
+(version 1.3.9)
 
 Bugs, crashes and logs: post them on Discord, https://discord.gg/3TUEGTMshP
 
@@ -73,7 +73,7 @@ GOOD TO KNOW
     much yet.
   - DLL mods for the 32-bit game do not work here. Normal .pack mods should; mods with
     custom shaders may not.
-  - Starting from the desktop icon: the Steam overlay and invites may not work.
+  - Steam invites (joining a friend from the overlay) are not tested yet.
 
 TO UPDATE OR REMOVE
   Run the new installer and type 1 to update, or 2 to remove it.

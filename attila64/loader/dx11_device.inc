@@ -19,6 +19,7 @@
 static int g_want_dx11;                 // 1 = this run draws with DirectX 11 (decided in graphics_choice.inc before the game starts)
 static uint32_t g_dx_sm = 3;            // shader model level told to the game (caps +8), see dx_create_device and patch_dx11
 static ID3D11DeviceContext1 *g_dx_c1;   // the same context seen as DirectX 11.1 (NULL on a system without it)
+#define DXREL(p) do { if (p) { ((IUnknown *)(p))->lpVtbl->Release((IUnknown *)(p)); (p) = NULL; } } while (0)
 static D3D11_RECT g_dx_scissor;         // the scissor rectangle as last set (starts as the whole window, like OpenGL's)
 typedef SYSV void *(*GameMallocFn)(size_t, int);
 typedef SYSV void (*GameCtorFn)(void *);
@@ -126,6 +127,65 @@ static int dx_make_back_buffer_view(void) {
     return SUCCEEDED(hr);
 }
 
+// A new screen size or window mode (options screen Apply; found 2026-11-24 from a Workshop report: "When I change resolution
+// to 4k, the screen goes white"). The game applies it as WS_ENGINE_IMP::set_graphics_options -> res_destroy(2) ->
+// pr_mode_change -> WS_ENGINE_SCREEN::mode_change -> destroy_device, then pr_create_device -> create_device. On OpenGL that
+// keeps the context, so every texture, buffer and shader the game still holds stays valid; it only rebuilds the screen.
+// Before this the DirectX 11 route released the whole device there and made a new one: everything the game kept pointed into
+// the old device (white screen; in a hidden test a crash right after). Now destroy_device only lets go of the screen
+// (dx_destroy_screen) and create_device, when the device is already there, resizes the swap chain and makes the game's back
+// buffer objects at the new size. destroy (+0x128, game end) still releases everything.
+static int dx_create_back_buffer(uint8_t *dev, uint32_t w, uint32_t h);
+static void dx_unbind_all(void);
+static int dx_resize_screen(uint8_t *dev, HWND old_hwnd, uint32_t w, uint32_t h, uint8_t vsync) {
+    HRESULT hr = S_OK;
+    DXREL(g_dx.bb_rtv);
+    if (g_dx.sc && g_dx.hwnd == old_hwnd) {
+        hr = g_dx.sc->lpVtbl->ResizeBuffers(g_dx.sc, 0, w, h, DXGI_FORMAT_UNKNOWN, 0);
+    } else {   // another window: a new swap chain for it
+        DXREL(g_dx.sc);
+        IDXGIDevice *xd = NULL; IDXGIAdapter *xa = NULL; IDXGIFactory2 *xf = NULL;
+        g_dx.d->lpVtbl->QueryInterface(g_dx.d, &IID_IDXGIDevice, (void **)&xd);
+        if (xd) xd->lpVtbl->GetAdapter(xd, &xa);
+        if (xa) xa->lpVtbl->GetParent(xa, &IID_IDXGIFactory2, (void **)&xf);
+        DXGI_SWAP_CHAIN_DESC1 sd;
+        memset(&sd, 0, sizeof sd);
+        sd.Width = w; sd.Height = h;
+        sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+        sd.SampleDesc.Count = 1;
+        sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+        sd.BufferCount = 2;
+        sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+        hr = xf ? xf->lpVtbl->CreateSwapChainForHwnd(xf, (IUnknown *)g_dx.d, g_dx.hwnd, &sd, NULL, NULL, &g_dx.sc) : E_FAIL;
+        if (xf) xf->lpVtbl->MakeWindowAssociation(xf, g_dx.hwnd, DXGI_MWA_NO_ALT_ENTER);
+        if (xf) xf->lpVtbl->Release(xf);
+        if (xa) xa->lpVtbl->Release(xa);
+        if (xd) xd->lpVtbl->Release(xd);
+    }
+    if (FAILED(hr) || !dx_make_back_buffer_view()) { log_line("DirectX 11: new screen size %ux%u failed 0x%08lx", w, h, (unsigned long)hr); return 0; }
+    g_dx.w = w; g_dx.h = h; g_dx.vsync = vsync;
+    if (!dx_create_back_buffer(dev, w, h)) { log_line("DirectX 11: back buffer objects at %ux%u failed", w, h); return 0; }
+    { D3D11_RECT all = {0, 0, (LONG)w, (LONG)h}; g_dx.c->lpVtbl->RSSetScissorRects(g_dx.c, 1, &all); g_dx_scissor = all; }
+    log_line("DirectX 11: screen now %ux%u (device kept)", w, h);
+    return 1;
+}
+// destroy_device (+0x100): only the screen (see above). The game's back buffer objects go; the device and the game's
+// resources stay.
+SYSV static void dx_destroy_screen(uint8_t *dev) {
+    if (!g_dx.d) return;
+    dx_unbind_all();
+    static const uint16_t objs[3] = {0x1628, 0x1618, 0x1620};
+    for (int i = 0; i < 3; i++) {
+        void *o = DXF(dev, objs[i], void *);
+        if (o) ((SYSV void (*)(void *))(*(void ***)o)[1])(o);
+        DXF(dev, objs[i], void *) = NULL;
+    }
+    DXF(dev, 0x1630, void *) = NULL;
+    DXREL(g_dx.bb_rtv);
+    g_dx.c->lpVtbl->Flush(g_dx.c);
+    log_line("DirectX 11: screen let go for a new mode (device kept)");
+}
+
 // create_device(this, adapter, CAWindow&, windowed, width, height, vsync (stack), anti-aliasing (stack)) -> bool. The field
 // writes copy what the OpenGL create_device (33d52f0) leaves for the rest of the game: window rect, caps, sizes.
 SYSV static uint8_t dx_create_device(uint8_t *dev, uint32_t adapter, uint8_t *win, uint8_t windowed, uint32_t w, uint32_t h,
@@ -140,8 +200,10 @@ SYSV static uint8_t dx_create_device(uint8_t *dev, uint32_t adapter, uint8_t *wi
     *(uint32_t *)(dev + 0x80) = 0;
     dev[0x1638] = 1;
     g_dx_thread = GetCurrentThreadId();   // the drawing thread
+    HWND old_hwnd = g_dx.hwnd;
     g_dx.hwnd = dx_hwnd_of_sdl_window(sdl_window);
     if (!g_dx.hwnd) { log_line("DirectX 11: no window handle from SDL"); return 0; }
+    if (g_dx.d) return dx_resize_screen(dev, old_hwnd, w, h, vsync);   // a new screen size (options Apply): keep the device
 
     UINT flags = getenv("ATTILA_DX11_DEBUG") ? D3D11_CREATE_DEVICE_DEBUG : 0;
     // test: ATTILA_DX11_WARP=1 draws with Windows' own software DirectX 11 (WARP), to check our use of DirectX against a second
@@ -480,7 +542,6 @@ typedef SYSV void (*GameFreeFn)(const void *);
 static const uint64_t *const GL_TEX2D_VTBL = (const uint64_t *)0x3c53700;
 enum { DX_TEX_SLOTS = 0xb0 / 8 };
 static uint64_t g_dx_tex_vtbl[DX_TEX_SLOTS];
-#define DXREL(p) do { if (p) { ((IUnknown *)(p))->lpVtbl->Release((IUnknown *)(p)); (p) = NULL; } } while (0)
 #define DXF(obj, off, T) (*(T *)((uint8_t *)(obj) + (off)))
 
 static void dx_tex_release(uint8_t *t) {
@@ -3357,7 +3418,7 @@ static void dx_build_tables(void) {
     g_dx.dev_vtbl[0x0e0 / 8] = (uint64_t)dx_is_tex_fmt;
     g_dx.dev_vtbl[0x0e8 / 8] = (uint64_t)dx_is_vtf_fmt;
     g_dx.dev_vtbl[0x1c8 / 8] = (uint64_t)dx_supported_fmt;
-    g_dx.dev_vtbl[0x100 / 8] = (uint64_t)dx_destroy;        // destroy_device
+    g_dx.dev_vtbl[0x100 / 8] = (uint64_t)dx_destroy_screen; // destroy_device: a new screen mode, the device stays
     g_dx.dev_vtbl[0x128 / 8] = (uint64_t)dx_destroy;        // destroy
     g_dx.dev_vtbl[0x000 / 8] = (uint64_t)dx_device_dtor;
     g_dx.dev_vtbl[0x008 / 8] = (uint64_t)dx_device_dtor;
@@ -3369,6 +3430,13 @@ static void dx_build_tables(void) {
 // deleted and their places emptied), then everything DirectX: the state objects made from the game's descriptions, the
 // swap chain, the context and the device. The game calls this when it ends, and a new create_device may follow (the
 // window is free again for a new swap chain). Seen 2026-11-12 at game exit as two "not done yet" lines.
+static void dx_unbind_all(void) {   // nothing of the old screen stays bound; our memos of what is bound start again
+    g_dx.c->lpVtbl->ClearState(g_dx.c);
+    memset(&g_dxb, 0, sizeof g_dxb);
+    memset(&g_dxc, 0, sizeof g_dxc);
+    memset(&g_dxset, 0, sizeof g_dxset);
+    g_dx_cur_layout = NULL;
+}
 SYSV static void dx_destroy(uint8_t *dev) {
     if (!g_dx.d) return;
     g_dx.c->lpVtbl->ClearState(g_dx.c);

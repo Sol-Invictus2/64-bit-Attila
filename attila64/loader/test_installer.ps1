@@ -28,7 +28,7 @@ if (-not $p.WaitForExit(90000)) { $p.Kill(); 'TIMED OUT' }
 Get-Content "$t\wait.txt"
 
 '--- 3. files match'
-$map = @{ 'attila64.exe' = "$root\attila64.exe"; 'SDL2.dll' = "$root\SDL2.dll"; 'steam_api64.dll' = "$root\steam_api64.dll"; 'libstdc++.so.6' = "$root\..\lib\libstdc++.so.6"; 'libgcc_s.so.1' = "$root\..\lib\libgcc_s.so.1"; 'Attila' = $real; 'packs\attila_8player_lobby.pack' = "$root\..\..\attila_8player\out8\attila_8player_lobby.pack"; 'packs\attila_8v8_battle.pack' = "$root\..\..\attila_8player\out8\attila_8v8_battle.pack" }
+$map = @{ 'attila64.exe' = "$root\attila64.exe"; 'SDL2.dll' = "$root\SDL2.dll"; 'steam_api64.dll' = "$root\steam_api64.dll"; 'libstdc++.so.6' = "$root\..\lib\libstdc++.so.6"; 'libgcc_s.so.1' = "$root\..\lib\libgcc_s.so.1"; 'Attila' = $real; 'packs\attila_8player_lobby.pack' = "$root\..\..\attila_8player\out8\attila_8player_lobby.pack"; 'packs\attila_8v8_battle.pack' = "$root\..\..\attila_8player\out8\attila_8v8_battle.pack"; 'packs\1212\!!1212ad_flag_wave.pack' = "$root\..\flagpack\!!1212ad_flag_wave.pack"; 'themes\mongol.jpg' = "$root\themes\mongol.jpg"; 'themes\glass.jpg' = "$root\themes\glass.jpg"; 'themes\islamic.jpg' = "$root\themes\islamic.jpg" }
 foreach ($k in $map.Keys) {
     $a = (Get-FileHash -LiteralPath "$t\game\attila64\$k" -Algorithm MD5).Hash; $b = (Get-FileHash -LiteralPath $map[$k] -Algorithm MD5).Hash
     "{0}: {1}" -f $k, $(if ($a -eq $b) { 'same' } else { 'DIFFERENT' })
@@ -67,6 +67,7 @@ Remove-Item Env:ATTILA_GAME_DIR
 $env:ATTILA_INSTALL_TEST = $t
 Set-Content "$t\game\keep.txt" 'x'
 Set-Content "$t\game\attila64\mod_list.txt" 'mod "x.pack";'   # 64-bit Attila's own mod list (since 1.2 Test 7): goes with it
+'perffix64.log', 'flagwave.log', 'flagwave_off.txt', 'plugins\perffix64.dll.old' | ForEach-Object { Set-Content "$t\game\attila64\$_" 'x' }   # left by perffix64.dll: go with it
 $p = Start-Process $exe -ArgumentList 'uninstall' -PassThru -NoNewWindow -RedirectStandardOutput "$t\un.txt"
 if (-not $p.WaitForExit(30000)) { $p.Kill(); 'TIMED OUT' }
 Get-Content "$t\un.txt" | Select-Object -Last 2

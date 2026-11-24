@@ -30,6 +30,16 @@ EMBED(f_notices, "../friend2/THIRD_PARTY_NOTICES.txt")
 EMBED(f_license, "../LICENSE.txt")   // MIT licence of the loader and installer, credit to Sol Invictus
 EMBED(f_pack_lobby, "../../attila_8player/out8/attila_8player_lobby.pack")   // 8-player campaign lobby
 EMBED(f_pack_battle, "../../attila_8player/out8/attila_8v8_battle.pack")   // 8v8 battle setup screen
+// JGdaCaesar's Attila Engine Performance Fix (perffix64.dll) is not shipped here since 1.3.15: players subscribe to his
+// Workshop item 3824249154 and the loader copies it in from there (plugins.inc). Uninstall still removes it.
+// 1212 AD's banners and pennants with Flag Wave's cloth data (mk1212_flags\build_flags.ps1); loader.c loads it first,
+// only when the mod list has 1212 AD and the flags are ticked
+EMBED(f_flagpack, "../flagpack/!!1212ad_flag_wave.pack")
+// The start window's themes (picker.c): public-domain / CC0 pictures, and where each is from (CREDITS.txt)
+EMBED(f_theme_mongol, "themes/mongol.jpg")
+EMBED(f_theme_glass, "themes/glass.jpg")
+EMBED(f_theme_islamic, "themes/islamic.jpg")
+EMBED(f_theme_credit, "themes/CREDITS.txt")
 // Up to 1.2 Test 5 the installer also put Mesa's OpenGL-on-DirectX-12 files in a dx12 folder (the start window's DirectX 12
 // choice). Since 2026-11-13 DirectX 11 is the only route offered, so they are no longer shipped, and an update removes them.
 static const char *const g_old_files[] = {"dx12\\opengl32.dll", "dx12\\libgallium_wgl.dll", "dx12\\dxil.dll"};
@@ -43,6 +53,11 @@ static const struct { const char *name; const uint8_t *start, *end; } g_files[] 
     {"LICENSE.txt", f_license_start, f_license_end},
     {"packs\\attila_8player_lobby.pack", f_pack_lobby_start, f_pack_lobby_end},   // loaded only by the 64-bit engine
     {"packs\\attila_8v8_battle.pack", f_pack_battle_start, f_pack_battle_end},
+    {"packs\\1212\\!!1212ad_flag_wave.pack", f_flagpack_start, f_flagpack_end},
+    {"themes\\mongol.jpg", f_theme_mongol_start, f_theme_mongol_end},
+    {"themes\\glass.jpg", f_theme_glass_start, f_theme_glass_end},
+    {"themes\\islamic.jpg", f_theme_islamic_start, f_theme_islamic_end},
+    {"themes\\CREDITS.txt", f_theme_credit_start, f_theme_credit_end},
 };
 
 // The files of older versions that this one no longer uses, and their folder. 1 = something could not be deleted.
@@ -60,9 +75,10 @@ static int remove_old_files(const char *folder) {
 #define NFILES (sizeof g_files / sizeof g_files[0])
 
 static const char *g_test;
+static int g_quiet;   // "self-update": started by the loader with no window, nobody to press Enter
 
 static void finish(int code) {
-    if (!g_test) {
+    if (!g_test && !g_quiet) {
         printf("\nPress Enter to close this window.\n");
         getchar();
     }
@@ -533,7 +549,11 @@ static void uninstall(const char *folder, const char *steam) {
         if (GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES && !DeleteFileA(p)) left++;
     }
     static const char *const extra[] = {"Attila", "attila64_log.txt", "attila64_log_previous.txt", "attila64_log_previous2.txt", "attila64_log_previous3.txt",
-                                          "attila64_log_previous4.txt", "settings.txt", "mod_list.txt", "mod_list.txt.tmp"};
+                                          "attila64_log_previous4.txt", "settings.txt", "mod_list.txt", "mod_list.txt.tmp",
+                                          // left by perffix64.dll (its logs, the flags switch, its self-update)
+                                          "plugins\\perffix64.dll", "perffix64.log", "flagwave.log", "flagwave_off.txt", "plugins\\perffix64.dll.old", "plugins\\perffix64.dll.new",
+                                          // the self-update (1.3.18+): its log, files that were in use then, the switch shared with perffix64.dll
+                                          "self_update_log.txt", "attila64.exe.old", "SDL2.dll.old", "steam_api64.dll.old", "update_off.txt"};
     for (size_t i = 0; i < sizeof extra / sizeof extra[0]; i++) {
         snprintf(p, sizeof p, "%s\\%s", folder, extra[i]);
         if (GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES && !DeleteFileA(p)) left++;
@@ -542,8 +562,14 @@ static void uninstall(const char *folder, const char *steam) {
     icon_path(p, sizeof p);
     DeleteFileA(p);
     remove_old_icon();
+    snprintf(p, sizeof p, "%s\\packs\\1212", folder);
+    RemoveDirectoryA(p);
     snprintf(p, sizeof p, "%s\\packs", folder);
     RemoveDirectoryA(p);
+    snprintf(p, sizeof p, "%s\\themes", folder);
+    RemoveDirectoryA(p);
+    snprintf(p, sizeof p, "%s\\plugins", folder);
+    RemoveDirectoryA(p);   // only when empty: other people's plugins stay
     RemoveDirectoryA(folder);
     if (left) {
         printf("Some files could not be removed. Close the game and run this again.\n");
@@ -563,6 +589,72 @@ static void unusable_message(const char *what) {
     finish(1);
 }
 
+// "self-update <attila64 folder>" (since 1.3.18): started by an older attila64.exe (self_update.inc) when this installer, its
+// Workshop copy, is newer. Only our own files in that folder: no search, no questions, the game file, desktop icon, Steam's
+// Play button, settings and mod list are left as they are. Every changed file is written as <name>.new first; when all
+// are written they are moved in, a file in use (the running attila64.exe) being renamed to <name>.old first (the loader
+// deletes those at its next start). Exit code 0 = updated.
+static void self_update_files(const char *folder) {
+    char p[MAX_PATH * 2 + 32], n[MAX_PATH * 2 + 40], o[MAX_PATH * 2 + 40];
+    snprintf(p, sizeof p, "%s\\attila64.exe", folder);
+    if (GetFileAttributesA(p) == INVALID_FILE_ATTRIBUTES) { printf("self-update: no 64-bit Attila in %s\n", folder); finish(2); }
+    printf("Updating 64-bit Attila in %s\n", folder);
+    static const char *const dirs[] = {"packs", "plugins", "packs\\1212", "themes"};
+    for (size_t i = 0; i < sizeof dirs / sizeof dirs[0]; i++) {
+        snprintf(p, sizeof p, "%s\\%s", folder, dirs[i]);
+        CreateDirectoryA(p, NULL);
+    }
+    remove_old_files(folder);
+    static int changed[NFILES];
+    int count = 0;
+    for (size_t i = 0; i < NFILES; i++) {   // 1. write what differs, as .new
+        size_t len = (size_t)(g_files[i].end - g_files[i].start);
+        snprintf(p, sizeof p, "%s\\%s", folder, g_files[i].name);
+        HANDLE f = CreateFileA(p, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, 0, NULL);
+        if (f != INVALID_HANDLE_VALUE) {
+            int same = 0;
+            if (GetFileSize(f, NULL) == len) {
+                uint8_t *buf = (uint8_t *)malloc(len ? len : 1);
+                DWORD got = 0;
+                same = buf && ReadFile(f, buf, (DWORD)len, &got, NULL) && got == len && !memcmp(buf, g_files[i].start, len);
+                free(buf);
+            }
+            CloseHandle(f);
+            if (same) continue;
+        }
+        snprintf(n, sizeof n, "%s.new", p);
+        if (!write_file(n, g_files[i].start, len)) {
+            printf("self-update: could not write %s (error %lu)\n", n, GetLastError());
+            for (size_t k = 0; k < i; k++) if (changed[k]) { snprintf(n, sizeof n, "%s\\%s.new", folder, g_files[k].name); DeleteFileA(n); }
+            finish(3);
+        }
+        changed[i] = 1;
+        count++;
+    }
+    int failed = 0;
+    // 2. move them in, attila64.exe (g_files[0]) last: if anything fails before it, the old exe stays and tries again next start
+    for (size_t k = 0; k < NFILES; k++) {
+        size_t i = (k + 1) % NFILES;
+        if (!changed[i]) continue;
+        if (i == 0 && failed) { snprintf(n, sizeof n, "%s\\attila64.exe.new", folder); DeleteFileA(n); break; }
+        snprintf(p, sizeof p, "%s\\%s", folder, g_files[i].name);
+        snprintf(n, sizeof n, "%s.new", p);
+        snprintf(o, sizeof o, "%s.old", p);
+        if (MoveFileExA(n, p, MOVEFILE_REPLACE_EXISTING)) { printf("  %s\n", g_files[i].name); continue; }
+        // in use (the running exe can be renamed, not replaced)
+        if (MoveFileExA(p, o, MOVEFILE_REPLACE_EXISTING)) {
+            if (MoveFileExA(n, p, 0)) { printf("  %s (old one was in use: %s.old)\n", g_files[i].name, g_files[i].name); continue; }
+            MoveFileExA(o, p, 0);   // put the old one back
+        }
+        printf("self-update: could not put in %s (error %lu)\n", g_files[i].name, GetLastError());
+        DeleteFileA(n);
+        failed++;
+    }
+    if (failed) finish(4);
+    printf("Done: %d file(s) updated.\n", count);
+    finish(0);
+}
+
 static void relaunch_as_admin(int argc, char **argv) {
     char self[MAX_PATH];
     GetModuleFileNameA(NULL, self, sizeof self);
@@ -579,6 +671,11 @@ int main(int argc, char **argv) {
     // update, and set Steam's Play button. The game closes itself right after starting this, so wait for it first.
     int from_game = !strcmp(arg, "from-game");
     g_test = getenv("ATTILA_INSTALL_TEST");
+    if (!strcmp(arg, "self-update")) {   // started by attila64.exe (self_update.inc)
+        g_quiet = 1;
+        if (argc < 3) { printf("self-update: no folder given\n"); finish(2); }
+        self_update_files(argv[2]);
+    }
     // A click inside the window would otherwise pause the installer until a key is pressed.
     {
         HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
@@ -649,6 +746,12 @@ int main(int argc, char **argv) {
     if (!CreateDirectoryA(folder, NULL) && GetLastError() == ERROR_ACCESS_DENIED) relaunch_as_admin(argc, argv);
     printf("\nCopying files...\n");
     snprintf(p, sizeof p, "%s\\packs", folder);
+    CreateDirectoryA(p, NULL);
+    snprintf(p, sizeof p, "%s\\plugins", folder);
+    CreateDirectoryA(p, NULL);
+    snprintf(p, sizeof p, "%s\\packs\\1212", folder);
+    CreateDirectoryA(p, NULL);
+    snprintf(p, sizeof p, "%s\\themes", folder);
     CreateDirectoryA(p, NULL);
     remove_old_files(folder);   // an update: the DirectX 12 files of older versions (not needed any more)
     for (size_t i = 0; i < NFILES; i++) {
