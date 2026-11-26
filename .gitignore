@@ -34,3 +34,6 @@ pkg_*.txt
 # the work diary stays on the PC
 CHANGES_NOT_RELEASED.md
 crash_webhook.h
+
+# a test's mod list (holds a PC folder)
+mod_list.txt

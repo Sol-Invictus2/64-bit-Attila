@@ -189,6 +189,13 @@ int settings_full_uploads(void) {
     char v[16];
     return settings_get("texture_uploads", v, sizeof v) && !strcmp(v, "full");
 }
+// Parallel battle effects, "parallel_effects=on" in settings.txt: battle effects (dust, blood, fire) are updated on all cores
+// (game_fixes.inc loader_game_settings; still an experiment, see SWITCHES.md). Anything else (or no line) = off, the game's
+// way, and the default. The environment switch ATTILA_PARALLEL_VFX wins over this line (0, off or empty = off).
+int settings_parallel_effects(void) {
+    char v[16];
+    return settings_get("parallel_effects", v, sizeof v) && !_stricmp(v, "on");
+}
 // "Show frame rate" tick box, show_fps=1|0 in settings.txt: a small frame-rate number drawn by the loader itself on every
 // graphics route (fps_overlay.c). Off unless ticked.
 int settings_show_fps(void) {

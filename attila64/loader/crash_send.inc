@@ -54,8 +54,25 @@ static char *crash_replace(char *text, const char *what, const char *rep) {
     return out;
 }
 
+// Every Steam ID (a 17-digit number starting 7656119, not part of a longer number) becomes "<steam id>". The new text is never
+// longer, so it is done in place.
+static char *crash_drop_steam_ids(char *text) {
+    static const char rep[] = "<steam id>";
+    char *w = text;
+    for (const char *r = text; *r;) {
+        int at_start = r == text || !isdigit((unsigned char)r[-1]);
+        size_t d = 0;
+        if (at_start && !strncmp(r, "7656119", 7)) while (d < 18 && isdigit((unsigned char)r[d])) d++;
+        if (d == 17) { memcpy(w, rep, sizeof rep - 1); w += sizeof rep - 1; r += 17; }
+        else *w++ = *r++;
+    }
+    *w = 0;
+    return text;
+}
+
 // The log without the Windows user name: the profile folder (C:\Users\<name>, wherever it is), then any other
 // "Users\<name>\" path. The bare name alone is left: a short name such as "Sol" is also part of ordinary words.
+// Steam IDs go too (since 2026-11-26; the question says nothing else of the player's is sent).
 static char *crash_anonymise(char *text) {
     char v[MAX_PATH], pat[MAX_PATH + 16];
     DWORD n = GetEnvironmentVariableA("USERPROFILE", v, sizeof v);
@@ -65,7 +82,7 @@ static char *crash_anonymise(char *text) {
         snprintf(pat, sizeof pat, "Users\\%s\\", v);
         text = crash_replace(text, pat, "Users\\<user>\\");
     }
-    return text;
+    return crash_drop_steam_ids(text);
 }
 
 // The log's size and time, so one crash is asked about once.

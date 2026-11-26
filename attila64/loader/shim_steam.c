@@ -79,7 +79,16 @@ SYSV static void w_filter_str(void *o, const char *k, const char *v, int cmp) { 
 SYSV static void w_filter_num(void *o, const char *k, int v, int cmp) { log_line("lobby search: number '%s' %d %d", k, cmp, v); r_filter_num(o, k, v, cmp); }
 SYSV static void w_filter_distance(void *o, int d) { log_line("lobby search: distance %d", d); r_filter_distance(o, d); }
 SYSV static void w_filter_count(void *o, int n) { log_line("lobby search: at most %d results", n); r_filter_count(o, n); }
-SYSV static uint8_t w_set_data(void *o, uint64_t id, const char *k, const char *v) { log_line("lobby advert: %llx '%s' = '%s'", (unsigned long long)id, k, v); return r_set_data(o, id, k, v); }
+// The player's own lobby advert holds their Steam ID ('steam_id') and Steam name ('host'): those two are not written to the log
+// in full (logs are posted on Discord and sent with crash reports), only the ID's last 4 digits and the name's length.
+SYSV static uint8_t w_set_data(void *o, uint64_t id, const char *k, const char *v) {
+    if (k && v && !strcmp(k, "steam_id")) {
+        size_t n = strlen(v);
+        log_line("lobby advert: %llx '%s' = '...%s' (%u digits)", (unsigned long long)id, k, n > 4 ? v + n - 4 : v, (unsigned)n);
+    } else if (k && v && !strcmp(k, "host")) log_line("lobby advert: %llx '%s' = <name, %u letters>", (unsigned long long)id, k, (unsigned)strlen(v));
+    else log_line("lobby advert: %llx '%s' = '%s'", (unsigned long long)id, k, v);
+    return r_set_data(o, id, k, v);
+}
 // ATTILA_TEST_NO_LOBBY=1 (set by the unattended test scripts): no lobby is made or joined, so a test click that lands on the
 // multiplayer screen cannot walk into other players' games. 0 = Steam's "no call" answer.
 static int no_lobby(const char *what) { if (!getenv("ATTILA_TEST_NO_LOBBY") || getenv("ATTILA_TEST_HOST")) return 0;   /* ATTILA_TEST_HOST=1: a test that hosts on purpose (hosting = the game joins the lobby it just made) */ log_line("lobby %s REFUSED: ATTILA_TEST_NO_LOBBY", what); return 1; }

@@ -934,12 +934,52 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
     return crash_report(r, c);
 }
 
+// A file Windows could not read (player log 2026-11-26, 1212AD campaign start on 1.3.28): CRASH code c0000006 at 524920 =
+// CA::UnbufferedFileIn::touch, which reads one byte of every page of a pack file range the game has mapped into memory
+// (VFS_IMPL::MAP_FILE_RM::put_file_in_memory <- PACK_FILE_ENTRY::lock <- the texture manager). c0000006 is Windows' "in-page
+// error": it could not bring that part of a mapped file in from the drive. The exception's third value is Windows' own
+// reason and the file can be asked for by its address, so both go in the log with what the player can do; that log named
+// neither. Only the folder from "steamapps" on (or the bare file name) is written: no user name. The CRASH line itself
+// stays as it is (the start window and the crash report look for it).
+__attribute__((noinline)) static void crash_note_unreadable_file(EXCEPTION_RECORD *r) {
+    if (r->ExceptionCode != 0xC0000006 || r->NumberParameters < 2) return;
+    char file[MAX_PATH * 2] = "";
+    typedef DWORD (WINAPI *MappedNameFn)(HANDLE, LPVOID, LPSTR, DWORD);
+    HMODULE k32 = GetModuleHandleA("kernel32.dll");
+    MappedNameFn name_of = k32 ? (MappedNameFn)(void *)GetProcAddress(k32, "K32GetMappedFileNameA") : NULL;
+    if (!name_of || !name_of(GetCurrentProcess(), (void *)r->ExceptionInformation[1], file, sizeof file - 1)) file[0] = 0;
+    const char *show = NULL;
+    for (const char *s = file; *s && !show; s++) if (!_strnicmp(s, "steamapps", 9)) show = s;
+    if (!show) { const char *s = strrchr(file, '\\'); show = s ? s + 1 : file; }
+    unsigned long long why = r->NumberParameters > 2 ? (unsigned long long)r->ExceptionInformation[2] : 0;
+    static const struct { unsigned code; const char *text; int memory; } reasons[] = {
+        {0xC000009C, "the drive reported a read error", 0}, {0xC000003E, "the drive reported a data error", 0},
+        {0xC000003F, "the drive reported a data check (CRC) error", 0}, {0xC0000185, "the drive reported an input/output error", 0},
+        {0xC000000E, "the drive is not there any more", 0}, {0xC00000C0, "the drive is not there any more", 0},
+        {0xC000009D, "the drive is not connected", 0}, {0xC000026E, "the drive was taken away while the game ran", 0},
+        {0xC00000A3, "the drive was not ready", 0}, {0xC0000011, "the file ends before the part that was asked for", 0},
+        {0xC0000102, "Windows says the file is damaged", 0}, {0xC0000032, "Windows says the drive's file system is damaged", 0},
+        {0xC0000242, "the file is stored compressed and its data is damaged", 0},
+        {0xC000009A, "Windows ran out of memory for the read", 1}, {0xC0000017, "Windows ran out of memory for the read", 1},
+    };
+    const char *text = NULL;
+    int memory = 0;
+    for (size_t i = 0; i < sizeof reasons / sizeof reasons[0]; i++)
+        if (reasons[i].code == (unsigned)why) { text = reasons[i].text; memory = reasons[i].memory; }
+    log_line("Windows could not read a file's data from the drive: %s (Windows' reason %08llx%s%s)", show[0] ? show : "the file is not known",
+             why, text ? ": " : "", text ? text : "");
+    if (memory) log_line("That is this PC running out of memory, not a game error: close other programs, or make Windows' paging file bigger.");
+    else log_line("That is a damaged file or a drive problem on this PC, not a game error. In Steam: Total War: ATTILA > Properties > "
+                  "Installed Files > Verify integrity of game files; for a mod's pack, unsubscribe and subscribe again; if it stays, check that drive.");
+}
+
 // The report: what happened, the registers and the game's and our code addresses on the stack, then the game ends.
 __attribute__((noinline)) static LONG crash_report(EXCEPTION_RECORD *r, CONTEXT *c) {
     log_go_sync();
     log_line("CRASH code %08lx at %p (read/write %llu, address %p)", r->ExceptionCode, (void *)c->Rip,
              r->NumberParameters ? (unsigned long long)r->ExceptionInformation[0] : 0,
              r->NumberParameters > 1 ? (void *)r->ExceptionInformation[1] : NULL);
+    crash_note_unreadable_file(r);
     log_line("rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx rsp=%llx rbp=%llx", c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rsi, c->Rdi, c->Rsp, c->Rbp);
     extern const char *shim_nearest(void *addr);
     uint8_t *self = (uint8_t *)GetModuleHandleA(NULL);

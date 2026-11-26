@@ -207,17 +207,24 @@ void loader_game_settings(void) {
     // thread: emitters write into shared scene nodes too, not only the pools. ATTILA_PARALLEL_VFX=1 turns it on for tests until
     // every shared write is locked. Since 2026-11-10 the effect gate (patch_vfx_gate) lets only plain billboard effects run
     // at the same time and keeps every other effect to one at a time; still a test switch until it has run long battles.
+    // Since 2026-11-26 also settings.txt parallel_effects=on (picker.c settings_parallel_effects). The environment switch
+    // wins over that line, and "0", "off" or an empty value mean OFF (before, any value at all turned it on, 0 included).
     {
         static const uint8_t vfx_read[7] = {0x80, 0x3D, 0x8D, 0x20, 0xDC, 0x01, 0x00};   // 34ad1de: cmp byte [VFX_PARALLEL_UPDATER+62h],0
         extern int g_vfx_pool_locked, g_vfx_gated;
-        if (!getenv("ATTILA_PARALLEL_VFX")) log_line("setting: effects updated one by one, the game's way (ATTILA_PARALLEL_VFX=1 tries all cores)");
+        extern int settings_parallel_effects(void);   // picker.c
+        const char *pv = getenv("ATTILA_PARALLEL_VFX");
+        int want = pv ? (pv[0] && strcmp(pv, "0") && _stricmp(pv, "off")) : settings_parallel_effects();
+        if (!want) log_line("setting: effects updated one by one, the game's way%s (settings.txt parallel_effects=on or ATTILA_PARALLEL_VFX=1 tries all cores)",
+                            pv ? ", ATTILA_PARALLEL_VFX says off" : "");
         else if (!g_vfx_pool_locked || !g_vfx_gated) log_line("setting skipped: parallel effects need the particle pool locks and the effect gate");
         else if (memcmp((void *)0x34ad1de, vfx_read, 7)) log_line("setting skipped, game code differs: parallel effects");
         else {
             extern int g_vfx_flip;
             *(uint8_t *)0x526f272 = 1;
-            g_vfx_flip = !strcmp(getenv("ATTILA_PARALLEL_VFX"), "flip");   // test: off and on again with every fps line (vfx_flip)
-            log_line("setting: battle effects updated on all cores (VFX_PARALLEL_UPDATER)%s", g_vfx_flip ? ", switched off and on with every fps line (test)" : "");
+            g_vfx_flip = pv && !strcmp(pv, "flip");   // test: off and on again with every fps line (vfx_flip)
+            log_line("setting: battle effects updated on all cores (VFX_PARALLEL_UPDATER; %s)%s", pv ? "ATTILA_PARALLEL_VFX" : "settings.txt parallel_effects=on",
+                     g_vfx_flip ? ", switched off and on with every fps line (test)" : "");
         }
     }
     dx11_game_settings();

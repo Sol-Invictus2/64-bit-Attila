@@ -49,7 +49,7 @@ Set as environment variables before starting `attila64.exe`. All are OFF unless 
 ### Turn an experiment on
 | Switch | Effect |
 |---|---|
-| `ATTILA_PARALLEL_VFX=1` | Battle effects updated on all cores. Crashed a 1212AD battle in Test 17 (shared scene nodes); since the effect gate (CHANGES_EFFECT_GATE.md) only plain effects run together. One fight tested, still off by default. |
+| `ATTILA_PARALLEL_VFX=1` or settings.txt `parallel_effects=on` | Battle effects updated on all cores. Crashed a 1212AD battle in Test 17 (shared scene nodes); since the effect gate (CHANGES_EFFECT_GATE.md) only plain effects run together. One fight tested, still off by default. The environment switch wins over the settings.txt line; `0`, `off` or an empty value mean off (since 2026-11-26; before, any value turned it on). |
 | `ATTILA_TASK_SPLIT=n` | How finely the task system cuts parallel work (game: 20). No gain measured. |
 | `ATTILA_FINE_TIMER=1` | Asks Windows for 0.5 ms timer ticks. No effect measured. |
 | `ATTILA_CLOCK_REAL=1` | `clock()` returns real time instead of processor time. No effect measured. |
@@ -108,4 +108,6 @@ Set as environment variables before starting `attila64.exe`. All are OFF unless 
 - `ATTILA_DX11_WARP=1`: DirectX 11 drawn by Windows' own software renderer (WARP) instead of the graphics card (test; slow). `ATTILA_DX11_KEEP_DYNAMIC=1`: dynamic textures the game writes by copy/update stay dynamic (the way before the 2026-11-17 NVIDIA text fix). `ATTILA_DX11_DROP_DYNAMIC_WRITES=1`: such writes are dropped, as NVIDIA's driver does (to see the NVIDIA "no text" case on another card). All in dx11_device.inc.
 | `ATTILA_NO_FILM_CLOCK_FIX=1` | Sound engine stopwatch back to processor time (films with sound stutter again). |
 | `ATTILA_NO_INNER_PATH_FIX=1` | Saved key sets no longer load (full path inside a game folder path not corrected). |
+| `ATTILA_NO_CONTEXT_CAMERA_FIX=1` | The battle context camera key (Insert) does nothing again, as in the Linux game (`context_camera.inc`). |
+| `ATTILA_CONTEXT_CAMERA_DIRECT=1` | The context camera key the 1.3.29 way: always the plain context camera, also for artillery, and nothing in first person (default: the game's cinematic view, as Windows Attila). |
 | `ATTILA_FILM_TRACE=1` | Test: logs how evenly each film's frames advance (film_trace.inc). |

@@ -414,7 +414,7 @@ SHIM_REG(stderr, &g_err);
 static const char *inner_drive_path(const char *p) {
     static int off = -1;
     if (off < 0) off = getenv("ATTILA_NO_INNER_PATH_FIX") != NULL;
-    if (off || !p) return p;
+    if (off || !p || !p[0]) return p;   // the loop starts at p + 1: an empty text has nothing there
     const char *last = NULL;
     for (const char *c = p + 1; c[0] && c[1] && c[2] && c[3]; c++)
         if ((c[0] == '/' || c[0] == 0x5c) && ((c[1] | 32) >= 'a' && (c[1] | 32) <= 'z') && c[2] == ':' && (c[3] == '/' || c[3] == 0x5c)) last = c + 1;
