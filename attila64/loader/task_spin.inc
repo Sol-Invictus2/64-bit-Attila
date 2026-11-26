@@ -1,4 +1,5 @@
-// Worker threads stay awake a moment before sleeping (settings.txt task_waits=game turns this off). Part of shim_gfx.c.
+// Worker threads stay awake a moment before sleeping. OFF by default since 1.3.24; settings.txt task_waits=fast turns
+// it on (picker.c settings_fast_task_waits has the measured reason). Part of shim_gfx.c.
 //
 // Measured 2026-11-12 in the user's own big clash (installed game, profiler): the main thread spent about 4% of its time
 // waking sleeping worker threads, and about 10% on the lock of the task queue.

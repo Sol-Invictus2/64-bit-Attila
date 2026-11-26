@@ -21,6 +21,22 @@ static int patch_stack_checks(Module *m) {
 // Changes to the game's own code. Each checks the original bytes first and is skipped if they differ.
 typedef struct { const char *name; uintptr_t addr; uint8_t old_bytes[8]; uint8_t new_bytes[8]; int len; } GamePatch;
 static const GamePatch g_game_patches[] = {
+    // 2026-11-25 (lobby / custom battle freeze, 0.4-0.6 s at every faction or army change): when a file is not there,
+    // CA::open_file and CA::FileInf::stat search again with a case-blind pattern (Filesystem::globsearch: regify + glob), the
+    // Linux game's way round case-sensitive disks. On Windows every name already matches in any case, so the search never
+    // finds anything; it only costs time. VFS_IMPL::latest_entry asks for each interface picture in every mod folder, so
+    // one faction change made about 20,000 of these searches. The call is replaced by "not found" (xor eax,eax + 3-byte nop).
+    {"no case-blind second search for missing files (open)", 0x4ee20a, {0xE8, 0x71, 0xED, 0xFF, 0xFF}, {0x31, 0xC0, 0x0F, 0x1F, 0x00}, 5},
+    {"no case-blind second search for missing files (stat)", 0x4ece5a, {0xE8, 0x21, 0x01, 0x00, 0x00}, {0x31, 0xC0, 0x0F, 0x1F, 0x00}, 5},
+    // 2026-11-26 (film stutter): VP8::MOVIE::calculate_target_frame (342c4a0) stops the film's clock while the decoder is more
+    // than 15 frames behind the wanted frame. For a looping film a negative "wanted - decoded" is taken for a wrap-around
+    // and the film length is added. But the one-thread decoder (get_frame_st, the only one used) always decodes one frame
+    // ahead, so the difference is -1 on every other call: 1649 "frames behind", clock stopped until the next call. Measured:
+    // the main menu's background film (1650 frames, no sound, looping) showed a frame every 60 ms instead of 33, at any frame
+    // rate. The film length is no longer added (add eax,[rbx+0x14] -> 3-byte nop), on the path without sound and the one
+    // with sound; a real lag (wanted ahead of decoded by more than 15) still stops the clock.
+    {"looping films at full speed (no sound)", 0x342c71c, {0x03, 0x43, 0x14}, {0x0F, 0x1F, 0x00}, 3},
+    {"looping films at full speed (with sound)", 0x342c5ff, {0x03, 0x43, 0x14}, {0x0F, 0x1F, 0x00}, 3},
     // The game's video memory budget is a 32-bit number, so a 16 GB card counts as 4095 MB. Going over it makes
     // TEXTURE_MANAGER::downgrade_features_to_target lower the graphics settings; returning at once leaves the real card memory as the limit.
     {"no lowering of settings at the 4 GB budget", 0x311f7e0, {0x55, 0x41, 0x57}, {0x31, 0xC0, 0xC3}, 3},
@@ -72,13 +88,13 @@ static unsigned card_memory_mb(void) {
 }
 
 // Room for small pieces of code the game can reach with its 32-bit jumps.
+static uint8_t *near_page;   // crash_filter counts it as our own code (in_own_code)
 static uint8_t *near_game_code(size_t n) {
-    static uint8_t *page;
     static size_t used;
-    for (uint64_t at = 0x5300000; !page && at < 0x60000000; at += 0x10000)
-        page = VirtualAlloc((void *)at, 0x2000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-    if (!page || used + n > 0x2000) return NULL;
-    uint8_t *p = page + used;
+    for (uint64_t at = 0x5300000; !near_page && at < 0x60000000; at += 0x10000)
+        near_page = VirtualAlloc((void *)at, 0x2000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!near_page || used + n > 0x2000) return NULL;
+    uint8_t *p = near_page + used;
     used += n;
     return p;
 }

@@ -192,7 +192,7 @@ static SYSV uint64_t movie_play_skip(void *ctl, const void *name, const void *pa
     return r;
 }
 static void patch_skip_movies(void) {
-    if (!getenv("ATTILA_TEST_SKIP_MOVIES")) return;
+    { const char *e = getenv("ATTILA_TEST_SKIP_MOVIES"); if (!e || !strcmp(e, "0")) return; }   // 0 = movies play (game_drive.ps1 -Extra)
     static const uint8_t old[5] = {0x55, 0x41, 0x57, 0x41, 0x56};
     g_movie_play_orig = (MoviePlayFn)hook_entry(0x1c26b30, old, 5, (void *)movie_play_skip);
     log_line("test switch: movies %s", g_movie_play_orig ? "skipped at once" : "NOT skipped (hook failed)");

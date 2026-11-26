@@ -1,0 +1,463 @@
+64-BIT ATTILA
+(version 1.3.27)
+
+Bugs, crashes and logs: post them on Discord, https://discord.gg/3TUEGTMshP
+
+Runs Total War: ATTILA as a 64-bit game on Windows, using the 64-bit game file Steam
+offers for the Linux version. You need Total War: ATTILA on Steam, and Steam running.
+Your normal Attila files and saves are not changed. After installing, Steam's Play button
+  starts 64-bit Attila (the installer asks first).
+
+HOW TO INSTALL (about 5 minutes)
+  1. Double-click  Install 64-bit Attila.exe
+     If a blue Windows box appears, click "More info", then "Run anyway".
+  2. A black window opens, and Steam opens a page called CONSOLE.
+  3. In Steam's CONSOLE page, click the long box at the very bottom.
+  4. Press Ctrl+V, then press Enter. This tells Steam to download the 64-bit game file.
+  5. Wait. The black window shows how far Steam's download is. After a few minutes
+     Steam writes "Depot download complete", and the black window carries on by itself.
+     Don't close it.
+  6. The black window asks to set Steam's Play button to 64-bit Attila: press Enter.
+     Steam closes for a moment and opens again.
+  7. When the black window says "Done!", close it.
+  8. Press Play on Attila in Steam, or use the new "64-bit Attila" icon on your desktop.
+
+  If the CONSOLE page didn't open: press the Windows key + R, type  steam://open/console
+  and press Enter.
+  If Ctrl+V pastes nothing: type  download_depot 325610 325624  and press Enter.
+
+FIRST START
+  The first start can take a minute or more. A mod list opens: tick your mods and press
+  Play. Click to skip the intro movie.
+
+NEW IN 1.3.27  (fewer false crashes with overlays, HDR fix; thanks to ATN / RenoDX)
+  - The game no longer closes when a graphics driver, ReShade or another overlay, or a
+    Windows file hits a small error that it handles by itself. Real crashes are still
+    caught and logged as before.
+  - With an HDR mod (such as ReShade HDR) the frame-rate number and the Discord button
+    show normally instead of a block of broken pixels.
+  - The Discord button on the main menu can be turned off: put a line
+    discord_button=off  in settings.txt in the attila64 folder.
+  - Plugins that hook 12 to 15 bytes of the game no longer crash.
+  - These three fixes were found and made by ATN (RenoDX). Thank you!
+  - Players on 1.3.19 or newer get this version by themselves at the next start.
+
+NEW IN 1.3.26  (campaign cutscenes on screens above 1080p)
+  - Full-screen campaign films, such as the crusade and faction intro cutscenes of
+    Medieval Kingdoms 1212AD, were too big on screens above 1080p (most of all on wide
+    3440x1440 screens): pushed down with a black band on top and cut off at the right
+    and bottom. They now fit the screen. The battle film panel had the same fault.
+  - Players on 1.3.19 or newer get this version by themselves at the next start.
+
+NEW IN 1.3.25  (saved keys, smooth films, Graphics choice)
+  - Changed keys are kept. Saving a key set always worked, but the game could not load it
+    again at the next start (or with Load Keys), so the keys went back to default.
+  - The intro films no longer stutter: they followed a sound clock that only moved in
+    15 ms steps on Windows.
+  - The moving picture behind the main menu plays at full speed. It ran at half speed
+    (a fault in the game's own code for looping films without sound).
+  - The mod list has a "Graphics" choice again: DirectX 11 (normal) or OpenGL. A PC that
+    was put on OpenGL after a failed start can be set back to DirectX 11 there; it
+    replaces the "Use DirectX 11 again" button.
+  - Players on 1.3.19 or newer get this version by themselves at the next start.
+
+NEW IN 1.3.24  (smoother on PCs with fewer cores and on laptops)
+  - The game's helper threads go to sleep at once again when they have no work, as in
+    normal Attila. Keeping them awake gave no extra speed in tests but used much more
+    processor time, which could slow down PCs with 4-6 cores and laptops.
+  - To turn the old way back on, add the line  task_waits=fast  to attila64\settings.txt.
+  - Players on 1.3.19 or newer get this version by themselves at the next start.
+
+NEW IN 1.3.23  (no more freezes when changing faction or army)
+  - In the multiplayer battle lobby and in Custom Battle, the game froze for about half a
+    second each time a player changed faction or army, more with many mods subscribed.
+    That is fixed.
+  - Players on 1.3.19 or newer get this version by themselves at the next start.
+
+NEW IN 1.3.22  (normal Attila launcher, uninstaller, Move to top)
+  - The mod list has a "Normal Attila launcher (Mod Manager, Workshop upload)" button. It
+    opens Attila's own launcher, so mod makers can upload their mods to the Workshop again
+    without changing anything in Steam. The 64-bit game is not started then.
+  - A "Move to top" button in the mod list.
+  - A real uninstaller: "Uninstall 64-bit Attila.exe" in the attila64 folder, also listed
+    in Windows Settings > Apps as "64-bit Attila". It removes the whole folder and puts
+    Steam's Play button back to normal Attila. Please don't just delete the folder: Steam's
+    Play button would still point to it.
+  - If the folder was deleted by hand and Steam says "Failed to start process ... cannot find
+    the path specified", run Install 64-bit Attila.exe: it offers to install again (1) or to
+    put Steam's Play button back to normal Attila (2). Or by hand: Steam > right-click Attila >
+    Properties > General, and clear Launch Options.
+  - Players on 1.3.19 or newer get this version by themselves at the next start.
+
+NEW IN 1.3.20  (crash with a game controller connected)
+  - Fixed a crash at the main menu when a game controller, gamepad or joystick is connected
+    (or anything Steam Input sees as one). The game passed two of Steam's controller questions
+    ("is this button pressed", "where is this stick") the wrong way, and Steam crashed.
+  - Players on 1.3.19 get this version by themselves at the next start (the first update
+    through the new self-update).
+
+NEW IN 1.3.19  (updates itself from the Workshop)
+  - 64-bit Attila now updates itself. When Steam has downloaded a newer version of this
+    Workshop item, the next start of 64-bit Attila installs it (a small "Updating..." note
+    shows for a few seconds) and then starts the new version. Your settings, mod list, the
+    game file and Steam's Play button are not touched.
+  - Only ever to a NEWER version. If Steam is still downloading, it waits for the next start.
+    If anything goes wrong, the version you have starts as before.
+  - To stop it: put an empty file named update_off.txt in the attila64 folder (the same
+    switch stops the engine performance fix's updates).
+  - This is the last time you need to run the installer by hand to update.
+
+NEW IN 1.3.18  (unit stats in two columns, Medieval Kingdoms 1212AD)
+  - The unit stats panel shows the stats in two columns: melee stats on the left (Melee Attack,
+    Melee Damage, Charge Bonus, Melee Defence, Attack Against Cavalry), the others on the right.
+    Each stat shows its name and number with its bar under them. When one side has more
+    stats, some move to the left so both columns are about the same length, and nothing
+    goes under the ability icons. If the stats are not in English, or do not fit, they stay
+    in one column as before.
+
+NEW IN 1.3.17  (changing the resolution in the game)
+  - Changing the resolution in the game's options (for example to 4K) no longer gives a
+    white screen with DirectX 11. If you start at a small size and switch to 4K, restart
+    the game once for the sharp 4K interface pictures.
+
+NEW IN 1.3.16  (sharp interface on 4K screens)
+  - Optional add-on on the Workshop: "64-bit Attila: Sharp 4K Interface" (about 1 GB),
+    https://steamcommunity.com/sharedfiles/filedetails/?id=3845260607
+    Subscribe and 64-bit Attila finds it by itself. On a 4K screen with Interface size
+    "Auto", or 150% and more, every interface picture is shown sharp instead of stretched.
+    DirectX 11 only. At 100% it stays off. Nothing is copied into your game folder.
+
+NEW IN 1.3.15  (engine performance fix from the Workshop, themes for the mod list window)
+  - The engine performance fix is no longer inside 64-bit Attila. Subscribe to JGdaCaesar's
+    "Attila Engine Performance Fix" on the Workshop: 64-bit Attila copies it in by itself and
+    keeps it up to date from there, so you always have his newest version. It only ever takes
+    a newer version, and waits until Steam has finished downloading it. A file named
+    update_off.txt in the attila64 folder stops the updates (for testers).
+  - Installed 1.3.14? The copy it gave you keeps working until you subscribe; then his
+    Workshop version replaces it.
+  - Themes for the mod list window: pick one in "Theme of this window" (bottom right).
+    Plain grey (as before), Dark, Stained glass (the 13th-century rose window of Reims
+    Cathedral), Islamic tiles (an Ottoman Iznik tile panel) and Mongol painting (Mongol
+    riders from the 14th-century Diez Albums). The window remembers your choice.
+
+NEW IN 1.3.14  (engine performance fix, upscaling, waving flags for 1212AD)
+  - JGdaCaesar's Attila Engine Performance Fix now comes with 64-bit Attila (in the plugins
+    folder): faster battles and campaign map, a faster memory manager, quicker menus.
+    Turn it off with the tick "Engine performance fix" in the mod list window.
+  - Upscaling and frame generation (NVIDIA DLSS, or AMD FSR on other cards): subscribe to
+    JGdaCaesar's "Upscaling and Framegen for Attila" on the Workshop. 64-bit Attila copies
+    it in by itself. Tick or untick "Upscaling and frame generation" in the mod list window;
+    press F8 in the game for its settings. (This tick also switches it for normal Attila.)
+  - Waving flags for Medieval Kingdoms 1212AD: the banners and lance pennants of 1212AD wave
+    as cloth in the wind. Nothing to install: when 1212AD is ticked, 64-bit Attila loads the
+    flags by itself. Untick "Waving flags (only for 1212AD)" to keep them still.
+
+NEW IN 1.3.13  (mod list: drag mods, mod pictures)
+  - In the mod list you can drag a mod up or down with the mouse to change the order.
+    Move up / Move down still work, and the list no longer jumps to the top after a move.
+  - The mod list shows the picture of the mod you click, as normal Attila's launcher does.
+
+NEW IN 1.3.12  (8 vs 8 battle screens)
+  - Battle loading screen in 8 vs 8: every army's faction icon shows, two rows of 4 a side
+    (before only 4 a side).
+  - Results screen after a multiplayer battle lists all 16 armies, with Continue on the
+    screen (before, armies 5 to 8 of each side were cut off).
+  - 1212AD: the unit stats panel shows the stats in one column again, also when you hover
+    over unit cards (before, two columns lay on top of each other).
+
+NEW IN 1.3.11  (back to DirectX 11)
+  - If the game once started without Steam running, older versions could switch it to
+    OpenGL for good (worse anti-aliasing). The mod list now shows a "Use DirectX 11 again"
+    button when that happened: click it, then press Play.
+
+NEW IN 1.3.10  (films, cursor, surround sound)
+  - Films (like the intro) are centred again. With an interface size above 100% they were
+    too big, pushed to the right and down, and cut off.
+  - In full screen the mouse now stays on the game's screen, as in normal Attila, so moving
+    it to the right or bottom edge moves the camera even with a second monitor there.
+    Alt+Tab still lets it go. To turn this off, add the line  cursor_lock=off  to
+    settings.txt next to attila64.exe.
+  - Sound with the 5.1 or 7.1 (or headphones) speaker setting works: before, music and
+    close sounds were lost and only faint distant sounds were left.
+
+NEW IN 1.3.9  (big panels fit on screen)
+  - Bigger panels (for example 1212AD's new campaign screen) no longer go off the top of the
+    screen at large interface sizes. The interface is never made smaller than 1080 pixels
+    high, so on a 1440 high screen 150% and more now look like Auto (133%). On a 4K screen
+    the most is 200%. Nothing else in the game changed.
+
+NEW IN 1.3.8  (Steam overlay)
+  - The Steam overlay works: press Shift+Tab in the game for friends, chat and the web
+    browser. 64-bit Attila now connects to Steam before it starts its graphics, so the
+    overlay can attach to the game's picture. Nothing else in the game changed.
+
+NEW IN 1.3.7  (Steam's Play button)
+  - The installer can set Steam's Play button to start 64-bit Attila. It asks first; Steam
+    closes for a moment and opens again. Removing 64-bit Attila puts it back to normal Attila.
+    Your own Launch Options for Attila, if you have any, are left alone.
+  - For mod makers: in 64-bit Attila the script call os.getenv('ATTILA64') returns 1 (nil in
+    normal Attila). "Install 64-bit Attila.exe from-game" installs or updates without questions,
+    for a mod's own upgrade button. Nothing else in the game changed.
+
+NEW IN 1.3.6  (text with NVIDIA graphics cards)
+  - With DirectX 11 on an NVIDIA graphics card, every text in the game was a solid bar: menus,
+    buttons, panels, everything. The game fills its letter pictures with a copy that DirectX 11
+    does not allow. AMD cards do the copy anyway, NVIDIA cards skip it. 64-bit Attila now turns
+    those letter pictures into a kind DirectX 11 lets the game copy into, on every card.
+  - Tested on an AMD card set to skip those copies the way NVIDIA does: without the fix every
+    text was a bar, with it the text is back. Not yet tried on a real NVIDIA card.
+  - If you switched to OpenGL because of this (graphics=opengl_fallback in settings.txt),
+    you can remove that line again.
+
+NEW IN 1.3.5  (battle line of sight with DirectX 11)
+  - With DirectX 11, units could not see each other in battle: enemies stayed invisible in
+    the open until they ran into your units, and the AI could not see you either, so it
+    did not attack. The game works out who sees whom on the graphics card, and with
+    DirectX 11 that never finished. With DirectX 11 it is now worked out on the processor,
+    with the game's own code. OpenGL is unchanged.
+  - Tested in the game's benchmark battle: line of sight is updated about as often as
+    with OpenGL, at about the same frame rate.
+  - If you switched to OpenGL because of this (graphics=opengl_fallback in settings.txt),
+    you can remove that line again.
+
+NEW IN 1.3.4  (lobby map with mods, Discord button)
+  - The multiplayer campaign lobby shows the campaign map of mods that name their map pictures
+    their own way. With The Dawnless Days it was white; now it shows Middle-earth. Normal
+    Attila and 1212AD look as before.
+  - A "64-bit Attila Discord" button in the bottom right corner of the main menu opens our
+    Discord in your browser, for bugs, logs and questions. It shows on the main menu only,
+    with any mod.
+  - Tested with copies of the game on one PC, with The Dawnless Days, 1212AD and no mods,
+    with DirectX 11 and OpenGL.
+
+NEW IN 1.3.3  (saved games missing from the load lists)
+  - If your Windows user name has letters outside English (Russian, Polish, Turkish, ...),
+    your games were saved, but the saves did not show in Load Campaign, in the save and
+    load panels, in Continue Campaign or in the multiplayer save list. They show now.
+    Nothing moves: your saves stay in the same folder.
+  - Tested with the saves in a folder with such letters: the lists show them, a new save
+    shows at once and loads back.
+
+NEW IN 1.3.2  (multiplayer campaign battles with 3 or more players)
+  - With 3 or more human players, the players who are not in a battle no longer decide it.
+    The game was made for 2 players: everyone who was not in the battle shared one choice,
+    and it switched to auto-resolve by itself after 60 seconds (when the AI attacks, they
+    never even see the window). With "Default battle resolution: Auto-resolve" in the lobby
+    (the default), that overruled the player who chose to fight.
+    Now the other players watch the battle by default and cannot auto-resolve it; only the
+    players who fight choose between fighting and auto-resolve. Games with 2 players work
+    as in normal Attila.
+  - "Concede Defeat" in a multiplayer battle ends the battle again, as in normal Attila.
+    Since 1.2 the battle went on with the AI leading your army, and when it finished every
+    player was sent back to the Campaign Games list. A player who drops out of a battle is
+    still replaced by the AI.
+  - Tested with 3 copies of the game on one PC (1212AD): battles fought with both other
+    players watching, one battle ended by its time limit and one conceded; each time all
+    three came back to the campaign map together. Not yet tested with 4 or more players or
+    over the internet.
+  - Every player in a multiplayer game needs this same version.
+
+NEW IN 1.3.1
+  - Turning or dragging the camera with the middle mouse button works as in normal Attila:
+    the camera keeps turning when the pointer reaches the edge of the screen, and the
+    pointer goes back to where the drag started. Before, a drag stopped at the screen
+    edge, and after a few drags the camera would not turn or move one way any more.
+    N zooms to the spot under the pointer: if it still does nothing, please send your log.
+  - The Dawnless Days (Beta 1.1.0) works:
+      its battles no longer crash while loading (some of its animations have bones
+      without movement data, which only the 64-bit game tripped over);
+      its settlements get 12 / 9 building slots and its encyclopedia address, as its
+      slot tool sets them in normal Attila;
+      its custom battle clean-up works on the 64-bit game's own saved battle set-ups,
+      never on normal Attila's.
+    Install it as its own guide says, then tick its six packs in the 64-bit mod list,
+    in order (pack1 to pack6). Tested on the test PC: its main menu and a battle. A full
+    campaign is not played yet: please report how it goes, with your log.
+  - Every player in a multiplayer game needs this same version.
+
+NEW IN 1.3.0  (multiplayer campaign fixes, found in a 3-player Medieval Kingdoms 1212AD test)
+  - Desync at turn 10 in 1212AD multiplayer campaigns fixed. Campaign scripts that kill,
+    create or hide characters and armies (in 1212AD for example the new Pope at turn 10)
+    did that only on one player's PC, so the other PCs went out of step. They now work
+    the same on every PC.
+  - Third player's turn timer stopping at 4:59 fixed. The game kept campaign messages and
+    dilemmas for 2 human players only, so a third player never saw a dilemma window and
+    the turn could not end. Every human player now gets their messages and dilemmas.
+    (Messages may still show as unread for players 3 to 8.)
+  - Crash in the multiplayer lobby fixed, when a friend or player has an emoji at the end
+    of their Steam name.
+  - Tested with 3 copies of the game on one PC playing a 1212AD campaign: past turn 10 with
+    all three in step, every player's dilemmas shown. Not yet with 3 real players over the
+    internet. Every player in a multiplayer game needs this same version.
+
+NEW IN 1.2 TEST 9  (a test version: please report what happens)
+  - DirectX 11: the sea on the campaign map is fixed. It glittered and flickered, and the
+    light shallow water along the coasts was missing. The sky reflection picture the game
+    loads (and the two small wave pictures) never reached the graphics card, so the sea
+    reflected no sky and its waves were noise. It now looks the same as with OpenGL.
+  - Test 8 was on the Workshop for a short time with faster AI army moves as well. They are
+    taken out again: AI armies move at the game's own speed. If you installed Test 8,
+    install this one: every player in a multiplayer game needs the same version.
+
+NEW IN 1.2 TEST 7
+  - Your mod list (which mods are ticked, and their order) is now 64-bit Attila's own:
+    mod_list.txt in the attila64 folder inside your Attila folder. Before, it shared
+    used_mods.txt with normal Attila, and normal Attila's launcher rewrites that file with
+    its own order every time it starts the game, so the 64-bit order kept resetting.
+    Your current list is copied over once at the first start of this version.
+    64-bit Attila no longer changes normal Attila's mod list either.
+  - The 8-player campaign was tested with 8 copies of the game on one PC: all 8 in one
+    lobby (4 teams of 2), each with their own faction, the campaign starts, and a full
+    round passes with every player's autosave. Not yet tested with 8 real players over
+    the internet: please report how it goes, with every player's log.
+
+NEW IN 1.2 TEST 6
+  - The game now draws with DirectX 11, the way normal Windows Attila does, with the
+    game's own DirectX 11 shaders. On the test PC: 7 to 12% more fps than OpenGL in the
+    game's benchmark (at 4K and at 2560x1440), and MSAA anti-aliasing (2x, 4x, 8x) works.
+  - The "Graphics" choice (OpenGL / DirectX 12) is gone from the mod list window. If
+    DirectX 11 does not start on your PC, the next start says so and uses OpenGL by itself.
+  - Big melees are faster: soldiers are drawn in groups instead of one by one, and their
+    lists are made on several cores. One big fight on the test PC: 107 -> 126 fps.
+  - "Texture sharpness" now works up to 16x with DirectX 11.
+  - The installer is small again (about 5 MB): it no longer carries the DirectX 12 files,
+    and an update removes them.
+  - DirectX 11 is new and tested on one PC so far. If something looks wrong, please send
+    your log. To go back to OpenGL: press "Show log file" in the mod list window, open
+    settings.txt in that folder and change the graphics line to  graphics=opengl_fallback
+    (or add that line if there is none).
+
+NEW IN 1.2 TEST 5
+  - Low frame rate on OpenGL? Check for recording and overlay programs first. On the test
+    PC, Discord (its Clips recording) cut the game's benchmark from 148 to 67 fps. Close
+    Discord, or switch off Clips and the in-game overlay in its settings, and try again.
+    On the DirectX 12 choice Discord made no difference there (about 92 fps either way).
+  - If DirectX 12 does not start on your PC: the log now says more about why. Please
+    start the game again, press "Copy last log" and send it, with your graphics card.
+
+NEW IN 1.2 TEST 4
+  - Faster battles: about 10% more fps in the game's benchmark on the test PC, same
+    picture. The game sent its whole table of fire, smoke and dust effects to the
+    graphics card every frame; now only the part that changed. If effects ever look
+    wrong (missing or frozen smoke, fire, dust), please report it with your log.
+  - Screens with Windows display scaling above 100% (most 4K screens): the game looked
+    soft, like a quarter of the resolution, and ran slowly. Windows was stretching a
+    half-size game window. The game's window now uses the screen's real pixels. Not yet
+    confirmed on such a screen: please report, and send the log if it still looks soft.
+    The log now has a line "Windows display scaling N%".
+  - Multiplayer campaign with more than 2 players: in 1.1 a third player could join but
+    was not shown in the lobby and the game could not start. The lobby now seats up to
+    8 players as 4 teams of 2 and lists all of them. NOT yet played with 3 or more real
+    players: if it fails, every player please press "Copy last log" in the mod list
+    window at the next start and send it. Every player needs this same version.
+  - Teams in the campaign lobby (new in test 2): every player has a "Team" button on his
+    own panel. Click it to move to the next team with a free place (4 teams, 2 players
+    each). Tested by one player alone so far.
+  - New choice in the mod list window, "Shadows redrawn": Every frame (as before), or
+    every 2nd, 3rd or 4th frame. Less often is faster (about +13% at every 2nd frame on
+    the test PC). Shadows of moving soldiers then follow a few frames late. When the
+    camera jumps or sweeps fast they are redrawn at once.
+  - If DirectX 12 does not start on your PC, the next start says so and goes back to
+    OpenGL by itself.
+  - The log now names the graphics driver in use.
+
+NEW IN 1.1
+  - Two new choices in the mod list window:
+    "Texture sharpness": how sharp the ground and textures are in the distance, from Off
+    to 16x. You see it in battle, not in the menu. "Game setting" leaves it as it is.
+    "Graphics": OpenGL (the normal way) or DirectX 12. The picture is the same. DirectX 12
+    was about a third slower on the test PC, though it loaded faster there. Try
+    it only if OpenGL gives you trouble: a black screen, wrong colours, crashes at the
+    start, or very low fps on built-in Intel graphics.
+  - The log now shows which graphics way is in use and which texture sharpness reached
+    the graphics card.
+  - The installer is bigger (about 80 MB): it carries the DirectX 12 files.
+
+NEW IN 1.0
+  - Sending a log is easy now: in the mod list window, "Copy last log" puts the log of your
+    last game on the clipboard, ready to paste where you report a problem, and "Show log file"
+    opens the folder with the log in it. After a crash, a note there reminds you to send it.
+  - The logs of your last four games are kept, so starting again no longer loses the one
+    that matters.
+  - The installer shows how far Steam's download is.
+
+NEW IN TEST 19 (since Test 14; Tests 16 and 17 could crash in battles, please update)
+  - The interface now follows your screen size, with sharp text: on screens bigger than
+    1080p it is drawn bigger, so it looks as it does at 1080p. To change it, use
+    "Interface size" in the mod list window (100% = the old small size).
+  - The first start of this version copies your graphics settings from normal Attila, once.
+  - Sharper ground and textures in the distance, and reflections now work.
+  - 8 vs 8 lobby: adding a player on one side no longer takes a hidden place on the other.
+  - Custom Battle (single player) is 4 against 4 again, as in the normal game.
+  - If Steam isn't running, a message asks you to start it, instead of a crash.
+  - Fixed "cannot reserve ... (error 487)" at the start on some PCs.
+  - Works when the game folder or your user folder has letters like é, å or ö in its name.
+
+WHAT YOU GET
+  - No 4 GB memory limit.
+  - Faster loading: an 8-player battle with all-large armies (about 40,000 men) loads in
+    about 30 seconds on the test PC.
+  - Higher fps: about 40-55 fps in that battle, and over 200 fps in a big normal battle
+    on the test PC.
+  - 8-player multiplayer campaign.
+  - 8 vs 8 multiplayer battles, with players or AI armies.
+  - When a player drops out, the AI takes over their armies and the game goes on.
+  - Every player autosaves at the end of each campaign round.
+  - Large armies stay available with more than 4 players.
+  - The options screen shows your real graphics memory, and settings are no longer
+    lowered at 4 GB.
+  - A mod list before the game starts. No mods are needed; tested with Medieval Kingdoms 1212AD.
+
+PLAYING TOGETHER
+  - Everyone must use this version, the same update. You will not see normal Windows
+    Attila games.
+  - Use the same mods in the same order. For a first test, press Tick none in the mod list.
+  - One hosts: Battles > Multiplayer Battle > Host Battle. The others join.
+  - For 8 vs 8 against the AI, use Multiplayer Battle > Host Battle and add AI players.
+    Custom Battle (single player) is 4 against 4.
+  - In Test 14 a player who joined a 16-player battle lobby where every place was already
+    taken could crash. Test 19 and later have a fix that is not yet tested with real players,
+    so to be safe, let your friends join first, then fill the other places with AI players.
+
+GOOD TO KNOW
+  - The game may still crash. If it does, start it again from the icon,
+    press "Copy last log" in the mod list window and paste it on the Discord,
+    https://discord.gg/3TUEGTMshP (or press "Show log file" and send the file
+    attila64_log.txt). In multiplayer, the logs
+    of both players help most.
+  - The 8-player campaign and 8 vs 8 battles are new and only lightly tested.
+  - Built-in Intel graphics can be very slow, above all on the first start.
+  - Apart from that one-time copy of your graphics settings, settings made here are kept
+    apart from normal Attila.
+  - If something in the interface looks wrong, set Interface size to 100% in the mod list
+    window, and please tell us what you saw.
+  - Campaign saves from normal 32-bit Attila don't work here: 64-bit Attila has its own
+    saves. Saving to Steam Cloud is switched off for now, and saves are not tested
+    much yet.
+  - DLL mods for the 32-bit game do not work here. Normal .pack mods should; mods with
+    custom shaders may not.
+  - Steam invites (joining a friend from the overlay) are not tested yet.
+
+TO UPDATE OR REMOVE
+  From 1.3.19 on, 64-bit Attila updates itself when it starts (see NEW IN 1.3.19).
+  From an older version: run the new installer and type 1 to update.
+  To remove it: Windows Settings > Apps > 64-bit Attila > Uninstall, or double-click
+  "Uninstall 64-bit Attila.exe" in the attila64 folder (1.3.22 and newer), or run the
+  installer and type 2. Normal Attila stays as it was.
+
+CREDITS AND LICENCE
+  64-bit Attila is a loader by Sol Invictus, built with AI assistance.
+  MIT, see LICENSE.txt. It covers 64-bit Attila's own files (the loader, the installer and
+  their source code) in every version, including the test versions shared before the licence
+  was added. It covers no game files: none are included, and you need your own copy of the
+  game. The game screens edited for 8 players are not covered either.
+  The other parts keep their own licences, listed in THIRD_PARTY_NOTICES.txt.
+  plugins\perffix64.dll is JGdaCaesar's Attila Engine Performance Fix (with Flag Wave), copied
+  in from his Workshop item; it is his, not covered by the MIT licence. Source and terms:
+  https://github.com/JSa25/AttilaCPUPerfFix
+  The pictures in the themes folder are public domain or CC0 (free to use and share):
+  Reims Cathedral's north rose window (photo by Vassil), an Iznik tile panel (photo: The
+  Metropolitan Museum of Art, Open Access) and "Mongol military manoeuvres" from the Diez
+  Albums (Staatsbibliothek zu Berlin). Sources and links: themes\CREDITS.txt.
+  Not affiliated with or endorsed by Creative Assembly, Feral Interactive or SEGA.
+  Total War and Total War: ATTILA are trademarks of their owners.

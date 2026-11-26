@@ -18,10 +18,10 @@ static int g_nmods;
 static char (*g_used)[160];  // the list as it was read, to tell whether anything changed
 static int g_nused;
 static char *g_other;        // lines of used_mods.txt that are neither mods nor folders; kept as they are
-static HWND g_list, g_size_box, g_sharp_box, g_shadow_box, g_fps_box, g_dx11_again, g_perf_box, g_flag_box, g_up_box;
+static HWND g_list, g_size_box, g_sharp_box, g_shadow_box, g_fps_box, g_dx11_again, g_gfx_box, g_perf_box, g_flag_box, g_up_box;
 static int g_result;
 
-enum { ID_LIST = 100, ID_UP, ID_DOWN, ID_ALL, ID_NONE, ID_PLAY, ID_QUIT, ID_SIZE, ID_SHARP, ID_GFX, ID_SHADOW, ID_COPYLOG, ID_SHOWLOG, ID_FPS, ID_DX11_AGAIN, ID_PICTURE, ID_PERF, ID_FLAGS, ID_UPSCALE, ID_THEME, WM_AUTO = WM_APP + 1 };
+enum { ID_LIST = 100, ID_UP, ID_DOWN, ID_ALL, ID_NONE, ID_PLAY, ID_QUIT, ID_SIZE, ID_SHARP, ID_GFX, ID_SHADOW, ID_COPYLOG, ID_SHOWLOG, ID_FPS, ID_DX11_AGAIN, ID_PICTURE, ID_PERF, ID_FLAGS, ID_UPSCALE, ID_THEME, ID_TOP, ID_LAUNCHER, WM_AUTO = WM_APP + 1 };
 
 // Interface size, kept in settings.txt next to the exe (a percentage, or "like1080p" for the automatic size). The engine reads it
 // at start. Since Test 18 the first entry (the default, also for the old "interface_size=auto" that earlier versions saved
@@ -124,6 +124,11 @@ int settings_cursor_lock_off(void) {
     char v[128];
     return settings_get("cursor_lock", v, sizeof v) && !_stricmp(v, "off");
 }
+// "discord_button=off" in settings.txt: no 64-bit Attila Discord button on the main menu (menu_button.c), as ATTILA_NO_DISCORD_BUTTON=1.
+int settings_discord_button_off(void) {
+    char v[128];
+    return settings_get("discord_button", v, sizeof v) && !_stricmp(v, "off");
+}
 int settings_graphics_dx12(void) {
     return 0;
 }
@@ -134,7 +139,7 @@ int settings_graphics_dx12(void) {
 // OpenGL, the card's own driver. Older settings files' graphics=opengl / dx12 / dx11 choices are not read any more.
 int settings_graphics_dx11(void) {
     char v[128];
-    return !(settings_get("graphics", v, sizeof v) && !_stricmp(v, "opengl_fallback"));
+    return !(settings_get("graphics", v, sizeof v) && (!_stricmp(v, "opengl_fallback") || !_stricmp(v, "opengl_chosen")));   // opengl_chosen: the player's own choice in the start window (2026-11-26); plain "opengl" is an old value and is not read
 }
 // "dx11_mode=basic" in settings.txt (no box in the start window): DirectX 11 tells the game "shader model 4", as OpenGL
 // does, instead of the game's full DirectX 11 path (shader model 5: the 2x / 4x / 8x anti-aliasing choices, particles
@@ -172,11 +177,13 @@ int settings_texture_filtering(void) {
 // (shadow_rate.inc). 1 = every frame, the game as it was, and the default.
 // Texture uploads, "texture_uploads=full" in settings.txt: every animation texture upload sends the whole texture, as up to
 // 1.2 Test 3. Anything else (or no line) = only the changed rows (1.2 Test 4 on). Read by tex_trace.inc.
-// Task waits, "task_waits=game" in settings.txt: worker threads sleep at once and the task queue is always locked, as the
-// game does. Anything else (or no line) = they stay awake a moment first (task_spin.inc) and an empty queue is peeked.
+// Task waits, "task_waits=fast" in settings.txt: worker threads stay awake a moment before sleeping (task_spin.inc) and an
+// empty task queue is peeked without its lock. Anything else (or no line) = the game's own way: threads sleep at once, the
+// queue is always locked. OFF by default since 2026-11-26 (1.3.24): measured 2026-11-11, no fps gain (133.4 off,
+// 132.8 / 133.5 on) but processor use 535% against 338%, which can slow PCs with few cores or laptops.
 int settings_fast_task_waits(void) {
     char v[16];
-    return !(settings_get("task_waits", v, sizeof v) && !strcmp(v, "game"));
+    return settings_get("task_waits", v, sizeof v) && !strcmp(v, "fast");
 }
 int settings_full_uploads(void) {
     char v[16];
@@ -651,6 +658,52 @@ static void move_selected(int by) {
     if (i < 0) return;
     move_mod(i, i + by);
     SetFocus(g_list);
+}
+
+static void move_selected_to_top(void) {   // 1.3.22, a player's request: "move to top"
+    int i = ListView_GetNextItem(g_list, -1, LVNI_SELECTED);
+    if (i <= 0) return;
+    move_mod(i, 0);
+    SetFocus(g_list);
+}
+
+// ---- Normal Attila's own launcher (1.3.22). With our Launch Options, Steam's Play starts us and hands us the path of CA's
+// launcher, so its Mod Manager (the only way to upload Attila mods to the Workshop) could not be reached any more (a modder's
+// report, 2026-11-25). This button starts that launcher as Attila (SteamAppId 325610), and this exe waits for it to close so
+// Steam keeps showing Attila as running. loader.c fills g_ca_launcher from Steam's arguments; otherwise launcher\launcher.exe
+// in the game folder (the working folder here) is used.
+char g_ca_launcher[MAX_PATH];
+static HANDLE g_launcher_proc;
+
+static int start_ca_launcher(HWND w) {
+    char exe[MAX_PATH], dir[MAX_PATH];
+    if (!g_ca_launcher[0] || GetFileAttributesA(g_ca_launcher) == INVALID_FILE_ATTRIBUTES)
+        GetFullPathNameA("launcher\\launcher.exe", sizeof g_ca_launcher, g_ca_launcher, NULL);
+    snprintf(exe, sizeof exe, "%s", g_ca_launcher);
+    if (GetFileAttributesA(exe) == INVALID_FILE_ATTRIBUTES) {
+        MessageBoxA(w, "Could not find normal Attila's launcher (launcher\\launcher.exe in the game folder).\n\n"
+                       "To use it from Steam's Play button instead: Steam > right-click Attila > Properties > General, clear Launch Options.",
+                    "64-bit Attila", MB_ICONWARNING);
+        return 0;
+    }
+    snprintf(dir, sizeof dir, "%s", exe);
+    char *s = strrchr(dir, '\\');
+    if (s) *s = 0;
+    SetEnvironmentVariableA("SteamAppId", "325610");
+    SetEnvironmentVariableA("SteamGameId", "325610");
+    char cmd[MAX_PATH + 4];
+    snprintf(cmd, sizeof cmd, "\"%s\"", exe);
+    STARTUPINFOA si = {sizeof si};
+    PROCESS_INFORMATION pi;
+    if (!CreateProcessA(exe, cmd, NULL, NULL, FALSE, 0, NULL, dir, &si, &pi)) {
+        char m[MAX_PATH + 160];
+        snprintf(m, sizeof m, "Could not start normal Attila's launcher (error %lu):\n%s", GetLastError(), exe);
+        MessageBoxA(w, m, "64-bit Attila", MB_ICONWARNING);
+        return 0;
+    }
+    CloseHandle(pi.hThread);
+    g_launcher_proc = pi.hProcess;
+    return 1;
 }
 
 // ---- Dragging a mod up or down the list (2026-11-22, the user: "make it that you can drag the mods"). The row follows the
@@ -1170,10 +1223,11 @@ static LRESULT CALLBACK picker_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
         col.pszText = (char *)"From";
         col.cx = 150;
         SendMessageA(g_list, LVM_INSERTCOLUMNA, 1, (LPARAM)&col);
-        add_control(w, "BUTTON", "Move up", WS_TABSTOP, 524, 48, 108, 28, ID_UP);
-        add_control(w, "BUTTON", "Move down", WS_TABSTOP, 524, 80, 108, 28, ID_DOWN);
-        add_control(w, "BUTTON", "Tick all", WS_TABSTOP, 524, 124, 108, 28, ID_ALL);
-        add_control(w, "BUTTON", "Tick none", WS_TABSTOP, 524, 156, 108, 28, ID_NONE);
+        add_control(w, "BUTTON", "Move to top", WS_TABSTOP, 524, 46, 108, 24, ID_TOP);
+        add_control(w, "BUTTON", "Move up", WS_TABSTOP, 524, 72, 108, 24, ID_UP);
+        add_control(w, "BUTTON", "Move down", WS_TABSTOP, 524, 98, 108, 24, ID_DOWN);
+        add_control(w, "BUTTON", "Tick all", WS_TABSTOP, 524, 130, 108, 24, ID_ALL);
+        add_control(w, "BUTTON", "Tick none", WS_TABSTOP, 524, 158, 108, 24, ID_NONE);
         add_control(w, "STATIC", "Interface size\n(Auto: like 1080p)", 0, 524, 206, 108, 30, 0);
         g_size_box = add_control(w, "COMBOBOX", "", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, 524, 238, 108, 200, ID_SIZE);
         for (int i = 0; i < N_SIZES; i++) SendMessageA(g_size_box, CB_ADDSTRING, 0, (LPARAM)g_sizes[i].text);
@@ -1184,12 +1238,17 @@ static LRESULT CALLBACK picker_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
         SendMessageA(g_sharp_box, CB_SETCURSEL, (WPARAM)(settings_texture_filtering() + 1), 0);
         if (settings_dx11_failed_last_time())
             MessageBoxA(w, "DirectX 11 did not start on this PC last time, so the game now uses OpenGL (the graphics card's own driver).\n\n"
-                           "If the game was only stopped for another reason (for example Steam was not running), press \"Use DirectX 11 again\".\n\n"
+                           "If the game was only stopped for another reason (for example Steam was not running), set \"Graphics\" back to DirectX 11.\n\n"
                            "If you report this, press \"Copy last log\" and say which graphics card you have.", "64-bit Attila", MB_ICONINFORMATION);
         // A PC on the OpenGL safety net gets a way back without editing settings.txt: a start without Steam used to leave
         // dx11_starting.txt behind (1.3.7 and older wrote it before connecting to Steam), which put working PCs on OpenGL.
-        if (!settings_graphics_dx11())
-            g_dx11_again = add_control(w, "BUTTON", "Use DirectX 11 again", WS_TABSTOP | BS_MULTILINE, 524, 414, 108, 36, ID_DX11_AGAIN);
+        // 2026-11-26: the choice is always shown (players asked why they were on OpenGL and how to get back; it replaces the
+        // "Use DirectX 11 again" button). DirectX 11 writes graphics=dx11, OpenGL writes graphics=opengl_chosen.
+        add_control(w, "STATIC", "Graphics", 0, 524, 414, 108, 16, 0);
+        g_gfx_box = add_control(w, "COMBOBOX", "", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, 524, 432, 108, 200, ID_GFX);
+        SendMessageA(g_gfx_box, CB_ADDSTRING, 0, (LPARAM)"DirectX 11");
+        SendMessageA(g_gfx_box, CB_ADDSTRING, 0, (LPARAM)"OpenGL");
+        SendMessageA(g_gfx_box, CB_SETCURSEL, settings_graphics_dx11() ? 0 : 1, 0);
         add_control(w, "STATIC", "Shadows redrawn\n(less often = faster)", 0, 524, 328, 108, 30, 0);
         g_shadow_box = add_control(w, "COMBOBOX", "", WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, 524, 360, 108, 200, ID_SHADOW);
         { static const char *const texts[4] = {"Every frame", "Every 2nd frame", "Every 3rd frame", "Every 4th frame"}; for (int i = 0; i < 4; i++) SendMessageA(g_shadow_box, CB_ADDSTRING, 0, (LPARAM)texts[i]); }
@@ -1233,6 +1292,7 @@ static LRESULT CALLBACK picker_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
         add_control(w, "BUTTON", "Copy last log", WS_TABSTOP, 524, 511, 108, 24, ID_COPYLOG);
         add_control(w, "BUTTON", "Show log file", WS_TABSTOP, 524, 537, 108, 24, ID_SHOWLOG);
         add_control(w, "BUTTON", "Play", WS_TABSTOP | BS_DEFPUSHBUTTON, 524, 566, 108, 34, ID_PLAY);
+        add_control(w, "BUTTON", "Normal Attila launcher\n(Mod Manager, Workshop upload)", WS_TABSTOP | BS_MULTILINE, 644, 566, 256, 34, ID_LAUNCHER);
         add_control(w, "BUTTON", "Quit", WS_TABSTOP, 524, 604, 108, 26, ID_QUIT);
         list_fill();
         if (g_nmods) {
@@ -1317,6 +1377,7 @@ static LRESULT CALLBACK picker_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_COMMAND:
         switch (LOWORD(wp)) {
+        case ID_TOP: move_selected_to_top(); break;
         case ID_UP: move_selected(-1); break;
         case ID_DOWN: move_selected(1); break;
         case ID_ALL: set_all(1); break;
@@ -1352,10 +1413,18 @@ static LRESULT CALLBACK picker_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
             break;
         case ID_COPYLOG: copy_last_log(w); break;
         case ID_SHOWLOG: show_log_file(w); break;
+        case ID_GFX:
+            if (HIWORD(wp) == CBN_SELCHANGE) settings_put("graphics", SendMessageA(g_gfx_box, CB_GETCURSEL, 0, 0) == 1 ? "opengl_chosen" : "dx11");
+            break;
         case ID_DX11_AGAIN:
             settings_put("graphics", "dx11");
             if (g_dx11_again) { DestroyWindow(g_dx11_again); g_dx11_again = NULL; }
             MessageBoxA(w, "The game will use DirectX 11 again from the next Play.", "64-bit Attila", MB_ICONINFORMATION);
+            break;
+        case ID_LAUNCHER:   // the mod list is saved as it is, then the 64-bit game is not started
+            read_checks();
+            save_list();
+            if (start_ca_launcher(w)) DestroyWindow(w);
             break;
         case ID_QUIT: DestroyWindow(w); break;
         }
@@ -1401,5 +1470,10 @@ int mod_picker_run(void) {
         DispatchMessageA(&m);
     }
     gdiplus_stop();   // the game must not keep the picture file open
+    if (g_launcher_proc) {   // normal Attila's launcher was chosen: stay until it closes, then end without starting the 64-bit game
+        WaitForSingleObject(g_launcher_proc, INFINITE);
+        CloseHandle(g_launcher_proc);
+        return 0;
+    }
     return g_result;
 }

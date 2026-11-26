@@ -523,6 +523,7 @@ static void relocate(Module *m, int do_copy) {
 #include "frontend_extras.inc"
 #include "script_trace.inc"
 #include "key_trace.inc"
+#include "film_trace.inc"
 #include "mouse_cursor.inc"
 #include "mod_support.inc"
 #include "pass_stats.inc"
@@ -552,6 +553,7 @@ static void apply_game_patches(void) {
     patch_menu_screen_watch();
     patch_script_trace();
     patch_key_trace();
+    patch_film_trace();
     patch_mouse_cursor();
     patch_animation_missing_tracks();
     test_mod_command();
@@ -654,6 +656,7 @@ __attribute__((naked)) static void enter_at(void *entry, void *sp) {
 }
 
 static void trace_setup(void);
+static void cover_frames(Module *m);
 typedef struct { const char *exe, *libdir; int argc; char **argv; } StartArgs;
 
 static DWORD WINAPI game_thread(void *param) {
@@ -677,6 +680,7 @@ static DWORD WINAPI game_thread(void *param) {
     log_line("functions not supplied yet: %d", g_missing);
 
     for (int i = 0; i < g_nmods; i++) patch_stack_checks(&g_mods[i]);
+    for (int i = 0; i < g_nmods; i++) cover_frames(&g_mods[i]);   // see crash_filter
     apply_game_patches();
     plugins_load(game);   // after our own fixes, so a plugin sees the game as it will run
     FlushInstructionCache(GetCurrentProcess(), NULL, 0);
@@ -842,6 +846,66 @@ static LONG trace_exception(EXCEPTION_POINTERS *ep) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
+static LONG crash_report(EXCEPTION_RECORD *r, CONTEXT *c);
+
+// 1 = the address is in the game or a library loaded next to it (Linux code), in attila64.exe, or in the page near the game
+// (hook trampolines, patches, plugin code).
+static int in_own_code(DWORD64 a) {
+    uint8_t *self = (uint8_t *)GetModuleHandleA(NULL);
+    IMAGE_NT_HEADERS *nt = (IMAGE_NT_HEADERS *)(self + ((IMAGE_DOS_HEADER *)self)->e_lfanew);
+    if ((uint8_t *)a >= self && (uint8_t *)a < self + nt->OptionalHeader.SizeOfImage) return 1;
+    if (near_page && (uint8_t *)a >= near_page && (uint8_t *)a < near_page + 0x2000) return 1;
+    for (int k = 0; k < g_nmods; k++)
+        if ((uint8_t *)a >= g_mods[k].lo && (uint8_t *)a < g_mods[k].hi) return 1;
+    return 0;
+}
+
+// Windows calls this when its search for a handler of an exception reaches a frame of the Linux code: nothing between the
+// fault and the game caught it. c is the context of the fault.
+static EXCEPTION_DISPOSITION game_frame_handler(EXCEPTION_RECORD *r, void *frame, CONTEXT *c, void *dc) {
+    (void)frame; (void)dc;
+    if (r->ExceptionFlags & (EXCEPTION_UNWINDING | EXCEPTION_EXIT_UNWIND)) return ExceptionContinueSearch;
+    log_line("nothing caught exception %08lx before the game's code", r->ExceptionCode);
+    crash_report(r, c);
+    return ExceptionContinueSearch;
+}
+
+// The Linux code has no Windows unwind data, so Windows' search for a handler gets lost in its frames and an exception that
+// a Windows DLL raised but nobody caught ended the game with no report at all. Each module's range gets one function table
+// entry (no unwind codes) with game_frame_handler as its handler: the search stops at the first frame there. The unwind
+// info and a jump to the handler go in a page above the module, within 4 GB (the table uses 32-bit offsets).
+static void cover_frames(Module *m) {
+    static RUNTIME_FUNCTION rf[MAX_MODULES];
+    static int n;
+    uint8_t *at = NULL;
+    for (uint64_t p = ((uint64_t)(uintptr_t)m->hi + 0xffff) & ~0xffffull; !at && n < MAX_MODULES && p < (uint64_t)(uintptr_t)m->lo + 0xF0000000ull; p += 0x10000)
+        at = VirtualAlloc((void *)(uintptr_t)p, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!at) { log_line("crash reports: no memory near %s, its frames are not covered", m->pub.name); return; }
+    at[0] = 1 | (UNW_FLAG_EHANDLER << 3); at[1] = 0; at[2] = 0; at[3] = 0;   // version 1, a handler, no prolog, no codes
+    uint8_t *jump = at + 8;   // mov rax,game_frame_handler; jmp rax
+    uint32_t h = (uint32_t)(jump - m->lo);
+    memcpy(at + 4, &h, 4);
+    uint64_t target = (uint64_t)game_frame_handler;
+    jump[0] = 0x48; jump[1] = 0xB8;
+    memcpy(jump + 2, &target, 8);
+    jump[10] = 0xFF; jump[11] = 0xE0;
+    rf[n].BeginAddress = 0;
+    rf[n].EndAddress = (DWORD)(m->hi - m->lo);
+    rf[n].UnwindData = (DWORD)(at - m->lo);
+    if (!RtlAddFunctionTable(&rf[n], 1, (DWORD64)(uintptr_t)m->lo)) { log_line("crash reports: function table for %s refused", m->pub.name); return; }
+    n++;
+}
+
+__attribute__((noinline)) static void log_left_alone(EXCEPTION_RECORD *r, CONTEXT *c) {
+    HMODULE m = NULL;
+    char name[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)c->Rip, &m))
+        GetModuleFileNameA(m, name, sizeof name);
+    const char *s = strrchr(name, '\\');
+    log_line("a Windows DLL raised exception %08lx, left to its own handler (at %p, %s)", r->ExceptionCode, (void *)c->Rip, s ? s + 1 : name);
+}
+
+// Kept small (the report is in crash_report): after a stack overflow this runs on what is left of the stack.
 static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
     LONG tr = trace_exception(ep);
     if (tr != EXCEPTION_CONTINUE_SEARCH) return tr;
@@ -850,12 +914,26 @@ static LONG WINAPI crash_filter(EXCEPTION_POINTERS *ep) {
     if (r->ExceptionCode == 0x406D1388 || r->ExceptionCode == 0x40010006 || r->ExceptionCode == 0x4001000A)
         return EXCEPTION_CONTINUE_SEARCH;
     // A C++ exception thrown and caught inside a Windows DLL (graphics driver, overlay, ...) is normal; this filter sees it before the DLL's own catch.
-    // If nobody catches it, unhandled_note below records that.
+    // If nobody catches it, game_frame_handler or unhandled_note below reports it.
     if (r->ExceptionCode == 0xE06D7363) {
         static volatile LONG seen;
         if (InterlockedIncrement(&seen) <= 5) log_line("a Windows DLL raised a C++ exception, left to its own handler (from %p)", (void *)c->Rip);
         return EXCEPTION_CONTINUE_SEARCH;
     }
+    // The same for any other exception in a Windows DLL: drivers, overlays such as ReShade and system DLLs catch some of their
+    // own a moment later (an access violation inside a guarded memory check, RPC errors like 6ba). One nobody catches reaches a
+    // game frame (game_frame_handler) or, on a thread of its own, unhandled_note: both report it. Stack overflow and heap damage
+    // are reported at once.
+    if (r->ExceptionCode != 0xC00000FD && r->ExceptionCode != 0xC0000374 && !in_own_code(c->Rip)) {
+        static volatile LONG seen_dll;
+        if (InterlockedIncrement(&seen_dll) <= 5) log_left_alone(r, c);
+        return EXCEPTION_CONTINUE_SEARCH;
+    }
+    return crash_report(r, c);
+}
+
+// The report: what happened, the registers and the game's and our code addresses on the stack, then the game ends.
+__attribute__((noinline)) static LONG crash_report(EXCEPTION_RECORD *r, CONTEXT *c) {
     log_go_sync();
     log_line("CRASH code %08lx at %p (read/write %llu, address %p)", r->ExceptionCode, (void *)c->Rip,
              r->NumberParameters ? (unsigned long long)r->ExceptionInformation[0] : 0,
@@ -888,7 +966,7 @@ __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
 static LONG WINAPI unhandled_note(EXCEPTION_POINTERS *ep) {
     log_go_sync();
     log_line("CRASH: nobody handled exception %08lx at %p", ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord->ExceptionAddress);
-    return EXCEPTION_CONTINUE_SEARCH;
+    return crash_report(ep->ExceptionRecord, ep->ContextRecord);
 }
 
 #include "settings_copy.inc"
@@ -937,6 +1015,14 @@ int main(int argc, char **argv) {
         if (!SetCurrentDirectoryA(over ? over : work)) {
             MessageBoxA(NULL, "Could not open the game folder.", "64-bit Attila", MB_ICONERROR);
             return 2;
+        }
+        {   // Steam's Play with our Launch Options hands us normal Attila's launcher (%command%): kept for the picker's
+            // "Normal Attila launcher" button (picker.c start_ca_launcher)
+            extern char g_ca_launcher[MAX_PATH];
+            for (int i = 1; i < argc; i++) {
+                size_t n = strlen(argv[i]);
+                if (n >= 12 && !_stricmp(argv[i] + n - 12, "launcher.exe")) { snprintf(g_ca_launcher, MAX_PATH, "%s", argv[i]); break; }
+            }
         }
         own_argv[0] = argv[0];
         own_argv[1] = own_game;

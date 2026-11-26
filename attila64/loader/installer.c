@@ -14,6 +14,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include "version.h"
 
 #define GAME_FILE_SIZE 758951919ull
 #define DOWNLOAD_COMMAND "download_depot 325610 325624"
@@ -76,11 +77,20 @@ static int remove_old_files(const char *folder) {
 
 static const char *g_test;
 static int g_quiet;   // "self-update": started by the loader with no window, nobody to press Enter
+static int g_delete_self;   // "uninstall-temp": this is a copy in %TEMP% made by the uninstaller; it removes itself when done
 
 static void finish(int code) {
     if (!g_test && !g_quiet) {
         printf("\nPress Enter to close this window.\n");
         getchar();
+    }
+    if (g_delete_self) {   // a running exe can't delete itself: a hidden cmd retries for up to two minutes after we exit
+        char self[MAX_PATH], cmd[MAX_PATH * 3];
+        GetModuleFileNameA(NULL, self, sizeof self);
+        snprintf(cmd, sizeof cmd, "cmd.exe /c for /L %%i in (1,1,120) do @(del /f /q \"%s\" 2>nul & if not exist \"%s\" exit) & ping -n 2 127.0.0.1 >nul", self, self);
+        STARTUPINFOA si = {sizeof si};
+        PROCESS_INFORMATION pi;
+        if (CreateProcessA(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi)) { CloseHandle(pi.hThread); CloseHandle(pi.hProcess); }
     }
     exit(code);
 }
@@ -536,6 +546,74 @@ static int steam_play_button(const char *steam, const char *exe, int on, int ask
     return on ? changed > 0 && !failed : 0;
 }
 
+// ---- Uninstaller (1.3.22; a player deleted the attila64 folder by hand because he found no uninstaller, which left Steam's
+// Play button pointing at a missing exe: "Failed to start process ... cannot find the path specified (0x3)").
+// Install and self-update put a copy of this installer in the folder as "Uninstall 64-bit Attila.exe" and list it in Windows
+// Settings > Apps (current user only, no admin needed). Started from there it copies itself to %TEMP% and runs from that copy,
+// so the folder can be removed completely.
+#define UNINSTALLER_NAME "Uninstall 64-bit Attila.exe"
+#define UNINSTALL_KEY "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\64-bit Attila"
+
+static void put_uninstaller(const char *folder) {
+    char self[MAX_PATH], target[MAX_PATH * 2], cmd[MAX_PATH * 3], icon[MAX_PATH * 2];
+    GetModuleFileNameA(NULL, self, sizeof self);
+    snprintf(target, sizeof target, "%s\\" UNINSTALLER_NAME, folder);
+    if (_stricmp(self, target) && !CopyFileA(self, target, FALSE)) { printf("Could not put the uninstaller in the folder (error %lu).\n", GetLastError()); return; }
+    if (g_test) return;
+    HKEY k;
+    if (RegCreateKeyExA(HKEY_CURRENT_USER, UNINSTALL_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &k, NULL) != ERROR_SUCCESS) return;
+    snprintf(cmd, sizeof cmd, "\"%s\" uninstall", target);
+    snprintf(icon, sizeof icon, "%s\\attila64.exe", folder);
+    const char *sv[][2] = {{"DisplayName", "64-bit Attila"}, {"DisplayVersion", APP_VERSION_TEXT}, {"Publisher", "Sol Invictus"},
+                           {"UninstallString", cmd}, {"DisplayIcon", icon}, {"InstallLocation", folder}};
+    for (size_t i = 0; i < sizeof sv / sizeof sv[0]; i++) RegSetValueExA(k, sv[i][0], 0, REG_SZ, (const BYTE *)sv[i][1], (DWORD)strlen(sv[i][1]) + 1);
+    DWORD one = 1;
+    RegSetValueExA(k, "NoModify", 0, REG_DWORD, (const BYTE *)&one, sizeof one);
+    RegSetValueExA(k, "NoRepair", 0, REG_DWORD, (const BYTE *)&one, sizeof one);
+    RegCloseKey(k);
+}
+
+// Started as <folder>\Uninstall 64-bit Attila.exe: run the real work from a copy in %TEMP% (it deletes itself afterwards).
+static void uninstall_from_temp(void) {
+    char self[MAX_PATH], tmp[MAX_PATH], copy[MAX_PATH * 2], cmd[MAX_PATH * 3];
+    GetModuleFileNameA(NULL, self, sizeof self);
+    GetTempPathA(sizeof tmp, tmp);
+    snprintf(copy, sizeof copy, "%sattila64_uninstall_%lu.exe", tmp, GetCurrentProcessId());
+    if (!CopyFileA(self, copy, FALSE)) return;   // run it from here then; only this exe stays behind
+    snprintf(cmd, sizeof cmd, "\"%s\" uninstall-temp", copy);
+    STARTUPINFOA si = {sizeof si};
+    PROCESS_INFORMATION pi;
+    if (!CreateProcessA(NULL, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi)) { DeleteFileA(copy); return; }
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    exit(0);   // same console: the copy carries on in this window
+}
+
+// 1 when some Steam account's Launch Options for Attila still name attila64.exe.
+static int play_button_is_ours(const char *steam) {
+    char find[MAX_PATH * 2], vdf[MAX_PATH * 3];
+    snprintf(find, sizeof find, "%s\\userdata\\*", steam);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(find, &fd);
+    int ours = 0;
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || fd.cFileName[0] == '.') continue;
+        snprintf(vdf, sizeof vdf, "%s\\userdata\\%s\\config\\localconfig.vdf", steam, fd.cFileName);
+        char *text = read_text(vdf);
+        if (!text) continue;
+        const char *apps, *app, *os, *oe;
+        if (vdf_find_attila(text, &apps, &app, &os, &oe) && os) {
+            char old[2048] = "";
+            vdf_unescape(os, oe, old, sizeof old);
+            if (contains_nocase(old, "attila64.exe")) ours = 1;
+        }
+        free(text);
+    } while (!ours && FindNextFileA(h, &fd));
+    FindClose(h);
+    return ours;
+}
+
 static void uninstall(const char *folder, const char *steam) {
     {   // Steam's Play button back to normal Attila first, while our exe is still there
         char exe[MAX_PATH * 2];
@@ -553,7 +631,9 @@ static void uninstall(const char *folder, const char *steam) {
                                           // left by perffix64.dll (its logs, the flags switch, its self-update)
                                           "plugins\\perffix64.dll", "perffix64.log", "flagwave.log", "flagwave_off.txt", "plugins\\perffix64.dll.old", "plugins\\perffix64.dll.new",
                                           // the self-update (1.3.18+): its log, files that were in use then, the switch shared with perffix64.dll
-                                          "self_update_log.txt", "attila64.exe.old", "SDL2.dll.old", "steam_api64.dll.old", "update_off.txt"};
+                                          "self_update_log.txt", "attila64.exe.old", "SDL2.dll.old", "steam_api64.dll.old", "update_off.txt",
+                                          // 1.3.22+: the uninstaller itself (this runs from a copy in %TEMP%)
+                                          UNINSTALLER_NAME};
     for (size_t i = 0; i < sizeof extra / sizeof extra[0]; i++) {
         snprintf(p, sizeof p, "%s\\%s", folder, extra[i]);
         if (GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES && !DeleteFileA(p)) left++;
@@ -571,6 +651,7 @@ static void uninstall(const char *folder, const char *steam) {
     snprintf(p, sizeof p, "%s\\plugins", folder);
     RemoveDirectoryA(p);   // only when empty: other people's plugins stay
     RemoveDirectoryA(folder);
+    if (!g_test) RegDeleteKeyA(HKEY_CURRENT_USER, UNINSTALL_KEY);
     if (left) {
         printf("Some files could not be removed. Close the game and run this again.\n");
         finish(1);
@@ -651,6 +732,7 @@ static void self_update_files(const char *folder) {
         failed++;
     }
     if (failed) finish(4);
+    put_uninstaller(folder);
     printf("Done: %d file(s) updated.\n", count);
     finish(0);
 }
@@ -671,6 +753,13 @@ int main(int argc, char **argv) {
     // update, and set Steam's Play button. The game closes itself right after starting this, so wait for it first.
     int from_game = !strcmp(arg, "from-game");
     g_test = getenv("ATTILA_INSTALL_TEST");
+    if (!strcmp(arg, "uninstall-temp")) { g_delete_self = 1; arg = "uninstall"; }
+    else {   // started as the uninstaller in the attila64 folder (Windows Apps, or a double-click)
+        char self[MAX_PATH];
+        GetModuleFileNameA(NULL, self, sizeof self);
+        const char *base = strrchr(self, '\\');
+        if (base && !_strnicmp(base + 1, "Uninstall", 9)) { arg = "uninstall"; uninstall_from_temp(); }
+    }
     if (!strcmp(arg, "self-update")) {   // started by attila64.exe (self_update.inc)
         g_quiet = 1;
         if (argc < 3) { printf("self-update: no folder given\n"); finish(2); }
@@ -728,11 +817,37 @@ int main(int argc, char **argv) {
         for (int i = 0; i < 60 && game_process(); i++) Sleep(1000);
         if (game_process()) { printf("Attila is still open. Close it, then run this again.\n"); finish(1); }
     }
-    if (!strcmp(arg, "uninstall")) uninstall(folder, steam);
+    if (!strcmp(arg, "uninstall")) {
+        if (!g_test) {
+            printf("\nRemove 64-bit Attila? Steam's Play button goes back to normal Attila; your saves are not touched.\n"
+                   "Press Enter to remove it, or type N and press Enter to keep it: ");
+            char a[16] = "";
+            fgets(a, sizeof a, stdin);
+            if (a[0] == 'n' || a[0] == 'N') finish(0);
+        }
+        uninstall(folder, steam);
+    }
     if (!strcmp(arg, "play-on") || !strcmp(arg, "play-off")) {   // only Steam's Play button
         snprintf(p, sizeof p, "%s\\attila64.exe", folder);
         steam_play_button(steam, p, !strcmp(arg, "play-on"), 0);
         finish(0);
+    }
+    // The folder was deleted by hand, but Steam's Play button still starts its exe (Steam: "cannot find the path specified").
+    snprintf(p, sizeof p, "%s\\attila64.exe", folder);
+    if (!from_game && GetFileAttributesA(p) == INVALID_FILE_ATTRIBUTES && play_button_is_ours(steam)) {
+        printf("\n64-bit Attila's folder is gone, but Steam's Play button still tries to start it, so Play does not work.\n"
+               "Type 1 to install 64-bit Attila again, or 2 to put Steam's Play button back to normal Attila, then press Enter: ");
+        char line[16] = "";
+        if (g_test) snprintf(line, sizeof line, "%s", getenv("ATTILA_INSTALL_ANSWER") ? getenv("ATTILA_INSTALL_ANSWER") : "1");
+        else fgets(line, sizeof line, stdin);
+        if (line[0] == '2') {
+            steam_play_button(steam, p, 0, 0);
+            if (!g_test) RegDeleteKeyA(HKEY_CURRENT_USER, UNINSTALL_KEY);
+            icon_path(p, sizeof p);
+            DeleteFileA(p);
+            finish(0);
+        }
+        if (line[0] != '1') finish(0);
     }
     if (is_folder(folder) && !g_test && !from_game) {
         printf("\n64-bit Attila is already here. Type 1 to update it, 2 to remove it, then press Enter: ");
@@ -822,6 +937,8 @@ int main(int argc, char **argv) {
         }
     }
 
+    put_uninstaller(folder);
+
     // desktop icon
     snprintf(p, sizeof p, "%s\\attila64.exe", folder);
     if (!make_icon(p, folder, game)) printf("Could not make the desktop icon. You can start this instead:\n  %s\n", p);
@@ -835,8 +952,9 @@ int main(int argc, char **argv) {
     else printf("\nDone! Keep Steam running and start the game from the \"64-bit Attila\" icon on your desktop.\n");
     printf("A mod list opens first: tick your mods and press Play. The first start can take a minute or more.\n");
     if (!play) printf("\nIMPORTANT: Steam's Play button still starts NORMAL 32-bit Attila. Use the desktop icon for the 64-bit game.\n");
-    else printf("\nTo play normal 32-bit Attila again: run this installer and remove 64-bit Attila, or clear Attila's\n"
-                "Launch Options in Steam (right-click Attila > Properties > General).\n");
+    else printf("\nNormal Attila's launcher (Mod Manager, Workshop uploads): press \"Normal Attila launcher\" in the mod list.\n"
+                "To remove 64-bit Attila: Windows Settings > Apps > 64-bit Attila > Uninstall (or \"%s\" in %s).\n"
+                "Please don't just delete the folder: Steam's Play button would still point to it.\n", UNINSTALLER_NAME, folder);
     printf("If something goes wrong, send this file:\n  %s\\attila64_log.txt\n", folder);
     finish(0);
     return 0;

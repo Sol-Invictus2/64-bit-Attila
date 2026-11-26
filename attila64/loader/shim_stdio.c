@@ -211,6 +211,70 @@ VARIADIC(__isoc99_sscanf) { return scan_common(0, (void *)regs[0], (const char *
 VARIADIC(__isoc99_fscanf) { return scan_common(1, (void *)regs[0], (const char *)regs[1], regs, overflow, 2); }
 
 // Files the game could not open, for finding out what is missing or mis-spelled.
+// ATTILA_FILE_TRACE=1 (test only, 2026-11-25 lobby freeze hunt): every stat / open / fopen / glob / scandir with its time.
+static int ftrace_on(void) { static int on = -1; if (on < 0) on = getenv("ATTILA_FILE_TRACE") != NULL; return on; }
+static double ftrace_us(LARGE_INTEGER t0) {
+    static LARGE_INTEGER f; LARGE_INTEGER t; if (!f.QuadPart) QueryPerformanceFrequency(&f); QueryPerformanceCounter(&t);
+    return (double)(t.QuadPart - t0.QuadPart) * 1e6 / (double)f.QuadPart;
+}
+static void ftrace(const char *what, const char *p, LARGE_INTEGER t0, int ok) {
+    static volatile LONG n;
+    double us = ftrace_us(t0);
+    if (InterlockedIncrement(&n) <= 3000000) log_line("file %s %s %.0f us: %.200s", what, ok ? "ok" : "MISS", us, p ? p : "?");
+}
+#define FT_START LARGE_INTEGER ft0 = {0}; if (ftrace_on()) QueryPerformanceCounter(&ft0)
+// Workshop folder check (2026-11-25, lobby / custom battle freeze): the game looks for every interface picture as a loose
+// file in EVERY subscribed Workshop item's folder (steamapps/workshop/content/325610/<item>/ui/...), often several times:
+// measured 41,600 stat/open/glob calls for one faction change in the custom battle screen (208 items), 0.5-1 s frozen on
+// Windows (cheap on Linux). Almost no item has such a subfolder. So the first folder level under an item is checked once
+// and remembered; a file under a folder that is not there is answered "not there" at once. Only reads, only Workshop
+// item folders (the game never writes there). A "not there" answer is believed for 5 seconds, then looked up again, so a
+// folder Steam downloads while the game runs is still found. ATTILA_NO_WS_DIR_CACHE=1 = the old way (every check on disk).
+static SRWLOCK g_wsd_lock = SRWLOCK_INIT;
+static struct { char *key; int exists; ULONGLONG when; } g_wsd[8192];
+static int ws_dir_missing(const char *p) {
+    static int off = -1;
+    if (off < 0) off = getenv("ATTILA_NO_WS_DIR_CACHE") != NULL;
+    if (off || !p) return 0;
+    char b[MAX_PATH * 2];
+    size_t n = 0;
+    for (; p[n] && n < sizeof b - 1; n++) { char c = p[n]; if (c == '\\') c = '/'; if (c >= 'A' && c <= 'Z') c = (char)(c + 32); b[n] = c; }
+    if (p[n]) return 0;
+    b[n] = 0;
+    char *m = strstr(b, "steamapps/workshop/content/");
+    if (!m) return 0;
+    char *q = m + 27;                             // <app>/<item>/<first>/...
+    for (int seg = 0; seg < 2; seg++) { q = strchr(q, '/'); if (!q) return 0; q++; }
+    char *end = strchr(q, '/');                   // a file directly in the item folder: not handled here
+    if (!end || end == q) return 0;
+    *end = 0;                                     // b = the item's first-level folder
+    uint32_t h = 2166136261u;
+    for (const char *c = b; *c; c++) h = (h ^ (uint8_t)*c) * 16777619u;
+    uint32_t i = h & 8191, k;
+    ULONGLONG now = GetTickCount64();
+    AcquireSRWLockShared(&g_wsd_lock);
+    for (k = 0; k < 8192 && g_wsd[i].key; k++, i = (i + 1) & 8191)
+        if (!strcmp(g_wsd[i].key, b)) {
+            if (!g_wsd[i].exists && now - g_wsd[i].when > 5000) break;   // an old "not there": look again
+            int e = g_wsd[i].exists; ReleaseSRWLockShared(&g_wsd_lock); return !e;
+        }
+    ReleaseSRWLockShared(&g_wsd_lock);
+    DWORD a = GetFileAttributesA(b);
+    int exists = a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY);
+    AcquireSRWLockExclusive(&g_wsd_lock);
+    static int used;
+    for (i = h & 8191; g_wsd[i].key && strcmp(g_wsd[i].key, b); i = (i + 1) & 8191) {}
+    if (g_wsd[i].key) { g_wsd[i].exists = exists; g_wsd[i].when = now; }
+    else if (used < 7000) {                       // table full: just no remembering any more
+        char *key = _strdup(b);
+        if (key) { g_wsd[i].key = key; g_wsd[i].exists = exists; g_wsd[i].when = now; used++; }
+    }
+    ReleaseSRWLockExclusive(&g_wsd_lock);
+    static volatile LONG told;
+    if (InterlockedIncrement(&told) <= 3) log_line("Workshop folder check: %s %s (remembered; a missing one is looked up again after 5 s)", m, exists ? "there" : "not there");
+    return !exists;
+}
+
 static void note_open_failure(const char *how, const char *path, const char *mode) {
     static volatile LONG shown;
     if (shim_debug() && InterlockedIncrement(&shown) <= 150) log_line("%s failed: '%s' mode %s, errno %d", how, path, mode, errno);
@@ -275,6 +339,7 @@ static FILE *open_binary(const char *path, const char *mode) {
     for (const char *p = mode; *p && k < 12; p++) if (*p != 'b' && *p != 'e' && *p != 'c' && *p != 'm' && *p != 't') m[k++] = *p;
     m[k++] = text ? 't' : 'b';
     m[k] = 0;
+    if (mode[0] == 'r' && !strchr(mode, '+') && ws_dir_missing(path)) { errno = ENOENT; return NULL; }
     FILE *f = fopen(path, m);
     if (!f) note_open_failure("fopen", path, mode);
     if (mode[0] != 'r' || strchr(mode, '+')) {
@@ -283,8 +348,8 @@ static FILE *open_binary(const char *path, const char *mode) {
     }
     return f;
 }
-SHIM(FILE *, fopen, (const char *p, const char *m)) { return open_binary(p, m); }
-SHIM(FILE *, fopen64, (const char *p, const char *m)) { return open_binary(p, m); }
+SHIM(FILE *, fopen, (const char *p, const char *m)) { FT_START; FILE *r = open_binary(p, m); if (ftrace_on()) ftrace("fopen", p, ft0, r != NULL); return r; }
+SHIM(FILE *, fopen64, (const char *p, const char *m)) { FT_START; FILE *r = open_binary(p, m); if (ftrace_on()) ftrace("fopen", p, ft0, r != NULL); return r; }
 SHIM(FILE *, fdopen, (int fd, const char *m)) { return _fdopen(fd, m); }
 SHIM(int, fclose, (FILE *f)) { return fclose(f); }
 SHIM(size_t, fread, (void *d, size_t a, size_t b, FILE *f)) { return fread(d, a, b, f); }
@@ -340,9 +405,27 @@ SHIM_REG(stdout, &g_out);
 SHIM_REG(stderr, &g_err);
 
 // low-level files with Linux flag values
+// Saved key sets (2026-11-26, Workshop reports "keybinds don't save"): the game keeps the chosen key set's name in its
+// registry file and at the next start loads <home>/custom_keys/<name>.keys.xml through its pack file system (SHORTCUT_HANDLER::
+// load_keys -> CA::FileIn::open). That code takes a path for a full one only when it starts with '/', as on Linux; a Windows
+// path "c:/users/..." is taken for a file inside the game's folders, so it asks for "<data folder>/c:/users/.../x.keys.xml":
+// never there, and every start went back to the default keys. A ':' can only be the second letter of a real Windows path,
+// so "<anything>/<letter>:/<rest>" is answered with "<letter>:/<rest>". ATTILA_NO_INNER_PATH_FIX=1 = off.
+static const char *inner_drive_path(const char *p) {
+    static int off = -1;
+    if (off < 0) off = getenv("ATTILA_NO_INNER_PATH_FIX") != NULL;
+    if (off || !p) return p;
+    const char *last = NULL;
+    for (const char *c = p + 1; c[0] && c[1] && c[2] && c[3]; c++)
+        if ((c[0] == '/' || c[0] == 0x5c) && ((c[1] | 32) >= 'a' && (c[1] | 32) <= 'z') && c[2] == ':' && (c[3] == '/' || c[3] == 0x5c)) last = c + 1;
+    if (!last) return p;
+    static volatile LONG told;
+    if (InterlockedIncrement(&told) <= 4) log_line("full path inside a game folder path: the full path used (...%.60s)", strlen(last) > 60 ? last + strlen(last) - 60 : last);
+    return last;
+}
 SHIM(int, open, (const char *p, int fl, int mode)) {
     char pb[MAX_PATH * 2];
-    p = game_path(p, pb, sizeof pb);
+    p = game_path(inner_drive_path(p), pb, sizeof pb);
     int w = _O_BINARY;
     int acc = fl & 3;
     w |= acc == 0 ? _O_RDONLY : acc == 1 ? _O_WRONLY : _O_RDWR;
@@ -350,7 +433,10 @@ SHIM(int, open, (const char *p, int fl, int mode)) {
     if (fl & 0x80) w |= _O_EXCL;
     if (fl & 0x200) w |= _O_TRUNC;
     if (fl & 0x400) w |= _O_APPEND;
+    FT_START;
+    if (acc == 0 && !(fl & 0x40) && ws_dir_missing(p)) { errno = ENOENT; if (ftrace_on()) ftrace("open", p, ft0, 0); return -1; }
     int fd = _open(p, w, _S_IREAD | _S_IWRITE);
+    if (ftrace_on()) ftrace("open", p, ft0, fd >= 0);
     if (fd < 0) note_open_failure("open", p, (fl & 3) ? "write" : "read");
     return fd;
 }
@@ -396,7 +482,11 @@ static void fill_stat(StatL *o, const struct _stat64 *s) {
 SHIM(int, __xstat, (int ver, const char *p, StatL *o)) {
     struct _stat64 s;
     char pb[MAX_PATH * 2];
-    if (_stat64(game_path(p, pb, sizeof pb), &s)) return -1;
+    FT_START;
+    const char *gp = game_path(inner_drive_path(p), pb, sizeof pb);
+    int bad = ws_dir_missing(gp) ? (errno = ENOENT, -1) : _stat64(gp, &s);
+    if (ftrace_on()) ftrace("stat", p, ft0, !bad);
+    if (bad) return -1;
     fill_stat(o, &s);
     return 0;
 }
@@ -433,7 +523,9 @@ SHIM(int, scandir, (const char *dir, DirentL ***list, dir_filter filter, dir_com
     char pat[MAX_PATH + 4];
     snprintf(pat, sizeof pat, "%s/*", dir);
     WIN32_FIND_DATAA fd;
+    FT_START;
     HANDLE h = FindFirstFileA(pat, &fd);
+    if (ftrace_on()) ftrace("scandir", pat, ft0, h != INVALID_HANDLE_VALUE);
     if (h == INVALID_HANDLE_VALUE) { errno = ENOENT; return -1; }
     size_t n = 0, cap = 64;
     DirentL **arr = malloc(cap * sizeof *arr);
@@ -462,7 +554,9 @@ typedef struct { size_t pathc; char **pathv; size_t offs; int flags; void *pad[5
 static int cmp_str(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
 SHIM(int, glob, (const char *pat, int flags, void *err, GlobL *g)) {
     WIN32_FIND_DATAA fd;
+    FT_START;
     HANDLE h = FindFirstFileA(pat, &fd);
+    if (ftrace_on()) ftrace("glob", pat, ft0, h != INVALID_HANDLE_VALUE);
     memset(g, 0, sizeof *g);
     if (h == INVALID_HANDLE_VALUE) return 3;    // GLOB_NOMATCH
     const char *slash = strrchr(pat, '/');

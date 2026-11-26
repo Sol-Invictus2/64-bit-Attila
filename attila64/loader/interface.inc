@@ -24,6 +24,16 @@ static SYSV uint64_t ui_restricted_size(void *engine, int use_scale) {
     // FRONT_END_UI::play_movie_in_component, BATTLE_UI::notify(PLAY_MOVIE_MSG).
     uintptr_t from = (uintptr_t)__builtin_return_address(0);
     int film = from == 0x571a40 || from == 0x29a5ce8 || from == 0x29a5e15 || from == 0x29a60dd || from == 0x2c11d62;
+    // 2026-11-26 (Discord: the 1212AD crusade cutscene at 3440x1440 pushed down, black band on top, cut off): the campaign's
+    // full-screen film panel (UIDLL::MOVIE_EVENT_PANEL constructor, "event_movie_panel", script cm:play_movie_in_ui) moves its
+    // film box to 0,0 and resizes it to the UNSCALED screen size (two calls, returning to 2aeffc5 and 2aeffe9), and the battle
+    // film panel (UIDLL::BattleMoviePanel::OnCreate, returning to 2c745a0) works its film rectangle out from it: the same
+    // fault as the intro film, at two places the first fix did not know (they load the function into a register first).
+    if (from == 0x2aeffc5 || from == 0x2aeffe9 || from == 0x2c745a0) {
+        film = 1;
+        static volatile LONG told;
+        if (InterlockedIncrement(&told) <= 4) log_line("film panel size: laid-out size given to the %s film panel", from == 0x2c745a0 ? "battle" : "campaign");
+    }
     if (!(use_scale & 0xff) && from != 0x2c1417a && from != 0x2c14197 && !film) {
         // the unscaled size: with upscaling that is the window, not the game's smaller frame (the interface's root box is made this
         // large by UIDLL::COMMON_UI::load_layout, and everything outside it is cut off)
@@ -103,13 +113,15 @@ static SYSV int text_details_trace(void *engine, const uint8_t *font, const void
 static void *hook_entry(uintptr_t at, const uint8_t *old, int len, void *fn) {   // trampoline for the first len bytes, then jump in
     uint8_t *f = (uint8_t *)at;
     if (memcmp(f, old, (size_t)len)) return NULL;
-    uint8_t *code = near_game_code(32);
-    if (!code) return NULL;
+    // 32 bytes: the way in (12) first, then the trampoline (up to 15 copied bytes and the 5-byte jump back). With the way in
+    // at +16 after the trampoline, a len of 12-15 (plugin_hook allows up to 15) had its jump back overwritten.
+    uint8_t *in = near_game_code(32);
+    if (!in) return NULL;
+    uint8_t *code = in + 12;
     memcpy(code, old, (size_t)len);
     code[len] = 0xE9;
     int32_t rel = (int32_t)((f + len) - (code + len + 5));
     memcpy(code + len + 1, &rel, 4);
-    uint8_t *in = code + 16;
     uint64_t target = (uint64_t)fn;
     in[0] = 0x48; in[1] = 0xB8;
     memcpy(in + 2, &target, 8);

@@ -153,7 +153,19 @@ SHIM(long long, clock, (void)) {
     if (g_tt_on) InterlockedIncrement(&g_tt_clock);
     static int mode = -1;
     if (mode < 0) mode = getenv("ATTILA_CLOCK_REAL") ? 1 : 0;
-    if (mode) {   // test: real time since the first call, in millionths of a second
+    // Film stutter (2026-11-26, Workshop reports of stuttering intro film and event clips): a film's frame comes from the sound
+    // engine's play position (VP8::MOVIE::calculate_target_frame 342c4a0 -> get_movie_time -> Wwise CAkPositionRepository::
+    // GetCurrPosition 368d760), which adds "clock() since the last sound buffer" to the buffer's position. clock() is processor
+    // time: smooth on Linux, but Windows counts it in 15.6 ms steps, so the film position jumped 15-20 ms at a time and fell
+    // back 10 ms at each new buffer (film frames shown for 10-50 ms instead of 33, some skipped). Wwise uses clock() as its
+    // one stopwatch (all 17 of its calls: position + segment repositories, CAkAudioMgr::Perform, CAkLEngine::GetBuffer, the
+    // stream manager), and the time stamps are passed between those parts: so for every call from the Wwise library
+    // (363a000..3740000) clock() is real time. Only the position repository's calls (tried first) gave a half-speed film.
+    // The game's other clock() calls (Lua os.clock, debug menu) keep processor time. ATTILA_NO_FILM_CLOCK_FIX=1 = off.
+    static int film_fix = -1;
+    if (film_fix < 0) { film_fix = getenv("ATTILA_NO_FILM_CLOCK_FIX") == NULL; if (film_fix) log_line("film clock: the sound engine counts real time"); }
+    uintptr_t from = (uintptr_t)__builtin_return_address(0);
+    if (mode || (film_fix && from >= 0x363a000 && from < 0x3740000)) {   // real time since the first call, in millionths of a second
         static LARGE_INTEGER fq, c0; LARGE_INTEGER c;
         if (!fq.QuadPart) { QueryPerformanceFrequency(&fq); QueryPerformanceCounter(&c0); }
         QueryPerformanceCounter(&c);

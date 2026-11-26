@@ -353,7 +353,8 @@ static void dx_test_shot(int second, ID3D11Resource *src) {
 }
 
 // The frame-rate number on the DirectX 11 route (fps_overlay.c): a small block of pixels put onto the picture that goes
-// to the window, not into the game's own back buffer, so the game's screenshots and the test pictures stay clean.
+// to the window, or in HDR mode into the game's picture just before the copy (dx_present). The game's screenshots and the
+// test pictures are taken before, so they stay clean.
 static void dx_fps_overlay(ID3D11Texture2D *target) {
     static uint8_t px[264 * 40 * 4];
     static char last[16];
@@ -378,6 +379,11 @@ static void dx_fps_overlay(ID3D11Texture2D *target) {
     if (!bw || bx + bw > (int)g_dx.w || by + bh > (int)g_dx.h) return;
     D3D11_BOX box = {(UINT)bx, (UINT)by, 0, (UINT)(bx + bw), (UINT)(by + bh), 1};
     g_dx.c->lpVtbl->UpdateSubresource(g_dx.c, (ID3D11Resource *)target, 0, &box, px, (UINT)bw * 4, 0);
+}
+// Both onto an 8-bit R8G8B8A8_UNORM texture of the window's size (dx_present picks which one).
+static void dx_overlays(ID3D11Texture2D *t) {
+    if (fps_overlay_on()) dx_fps_overlay(t);
+    if (menu_button_visible()) menu_button_dx11(g_dx.c, t, (int)g_dx.w, (int)g_dx.h);   // the Discord button (menu_button.c)
 }
 
 // Hidden test windows: Windows does not hold a hidden window's frames back (Present comes back at once), so nothing
@@ -429,9 +435,24 @@ SYSV static uint8_t dx_present(uint8_t *dev, void *src, void *dst) {
     uint8_t *bb = DXF(g_dx.dev, 0x1618, uint8_t *);   // the game drew into its back buffer texture: copy it to the window
     ID3D11Texture2D *out = NULL;
     if (bb && SUCCEEDED(g_dx.sc->lpVtbl->GetBuffer(g_dx.sc, 0, &IID_ID3D11Texture2D, (void **)&out))) {
-        g_dx.c->lpVtbl->CopyResource(g_dx.c, (ID3D11Resource *)out, DXF(bb, DXT_RES, ID3D11Resource *));
-        if (fps_overlay_on()) dx_fps_overlay(out);
-        if (menu_button_visible()) menu_button_dx11(g_dx.c, out, (int)g_dx.w, (int)g_dx.h);   // the Discord button (menu_button.c)
+        // The frame-rate number and the Discord button are 8-bit R,G,B,A pixels. When another program (an HDR mod) made the
+        // window's picture 16-bit float or 10-bit, the same bytes would show there as a patch of garbage. They then go into the
+        // game's own 8-bit picture just before it is copied to the window (the mod turns that copy into its format), so they
+        // still show. The game draws its picture anew every frame, and the test pictures above are taken before this.
+        // Neither of the two 8-bit (or not the same size): left out, logged once.
+        ID3D11Texture2D *pic = DXF(bb, DXT_RES, ID3D11Texture2D *);
+        D3D11_TEXTURE2D_DESC od, pd;
+        out->lpVtbl->GetDesc(out, &od);
+        pic->lpVtbl->GetDesc(pic, &pd);
+        ID3D11Texture2D *onto = od.Format == DXGI_FORMAT_R8G8B8A8_UNORM ? out
+                              : pd.Format == DXGI_FORMAT_R8G8B8A8_UNORM && pd.Width == od.Width && pd.Height == od.Height ? pic : NULL;
+        if (onto == pic) dx_overlays(pic);
+        g_dx.c->lpVtbl->CopyResource(g_dx.c, (ID3D11Resource *)out, (ID3D11Resource *)pic);
+        if (onto == out) dx_overlays(out);
+        if (!onto && (fps_overlay_on() || menu_button_visible())) {
+            static int told;
+            if (!told++) log_line("DirectX 11: the window's picture is format %u and the game's %u, not 8-bit: no frame-rate number or Discord button", (unsigned)od.Format, (unsigned)pd.Format);
+        }
         if (second >= 0 && shot_final) dx_test_shot(second, (ID3D11Resource *)out);
         out->lpVtbl->Release(out);
     }

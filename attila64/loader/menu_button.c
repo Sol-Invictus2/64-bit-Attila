@@ -6,7 +6,7 @@
 // main menus of their own). It shows only while the front end shows its main menu (frontend_extras.inc watches the screen
 // changes; the front end object UIDLL::FRONT_END_UI::s_ui must exist). Mouse moves still reach the game; a left click on
 // the button does not. Its size follows the interface zoom (40 pixels high at the game's own size). In hidden test runs a
-// click is logged but no browser is opened. ATTILA_NO_DISCORD_BUTTON=1 hides it.
+// click is logged but no browser is opened. settings.txt discord_button=off (picker.c) or ATTILA_NO_DISCORD_BUTTON=1 hides it.
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <d3d11.h>
@@ -30,7 +30,7 @@ static uint8_t *g_px[2][2];                         // [0 BGRA / 1 RGBA][normal 
 
 int menu_button_visible(void) {
     static int off = -1;
-    if (off < 0) off = getenv("ATTILA_NO_DISCORD_BUTTON") != NULL;
+    if (off < 0) { extern int settings_discord_button_off(void); off = getenv("ATTILA_NO_DISCORD_BUTTON") != NULL || settings_discord_button_off(); }
     if (off || !g_menu_main) return 0;
     return *(void *volatile *)(uintptr_t)0x5167298 != NULL;   // UIDLL::FRONT_END_UI::s_ui: the front end is up
 }
