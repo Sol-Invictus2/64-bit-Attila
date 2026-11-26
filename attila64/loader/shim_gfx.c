@@ -1233,7 +1233,7 @@ static void gl_menu_button(void) {
 
 // DirectX 11 route (loader\dx11_device.inc, ATTILA_DX11=1): no OpenGL context at all. AMD's OpenGL driver puts its own
 // DXGI swap chain on the window, and DirectX 11 is then refused one (0x80070005). The game gets a stand-in context, the other
-// SDL OpenGL calls do nothing for it, and the DirectX 11 present calls SDL_GL_SwapWindow only for the frame count / frame cap.
+// SDL OpenGL calls do nothing for it, and the DirectX 11 present calls SDL_GL_SwapWindow only for the frame count (the cap waits in dx_present, before Present).
 int g_dx11_no_gl;
 static char g_dx11_fake_context;
 SHIM(int, SDL_GL_MakeCurrent, (void *window, void *context)) {
@@ -1269,32 +1269,11 @@ SHIM(void *, SDL_GL_CreateContext, (void *window)) {
 }
 volatile unsigned g_frame_no;   // frames shown so far (loader.c spreads some per-frame checks over frames with it)
 
-// Frames per second, once every 5 seconds, into the log.
-SHIM(void, SDL_GL_SwapWindow, (void *w)) {
-    static void (__cdecl *r)(void *);
-    static long frames;
-    static ULONGLONG start;
-    if (!r) r = (void *)GetProcAddress(sdl_dll(), "SDL_GL_SwapWindow");
-    {   // Test only, ATTILA_TEST_BURN_US=n: keeps the main thread busy n microseconds every frame. If fps falls by that much the
-        // main thread sets the pace; if it does not, something else does and the main thread has slack.
-        static long long burn = -1, freq;
-        if (burn < 0) { const char *e = getenv("ATTILA_TEST_BURN_US"); LARGE_INTEGER f; QueryPerformanceFrequency(&f); freq = f.QuadPart; burn = e ? atoll(e) * freq / 1000000 : 0; }
-        if (burn) { LARGE_INTEGER t0, t; QueryPerformanceCounter(&t0); do QueryPerformanceCounter(&t); while (t.QuadPart - t0.QuadPart < burn); }
-    }
-    if (!g_dx11_no_gl) {
-        int shot = test_shot_due();   // unattended test runs: a picture of this frame before it is shown
-        static int shot_final = -1;   // test: ATTILA_TEST_SHOT_FINAL=1 takes it from the window's own picture, after the frame-rate number
-        if (shot_final < 0) shot_final = getenv("ATTILA_TEST_SHOT_FINAL") != NULL;
-        if (shot >= 0 && !shot_final) gl_test_shot(shot);
-        if (fps_overlay_on()) gl_fps_overlay();
-        if (menu_button_visible()) gl_menu_button();
-        if (shot >= 0 && shot_final) { g_gl_shot_window = 1; gl_test_shot(shot); g_gl_shot_window = 0; }
-        r(w);
-    }
-    test_frame_done();
-    g_frame_no++;
-    if (g_frame_no == 600) { extern void dx12_start_worked(void); dx12_start_worked(); }   // drawing for a while: a DirectX 12 start got through
-    // Frame cap: menus otherwise run at thousands of frames per second, working the card for nothing. ATTILA_FPS_CAP=0 turns it off.
+// Frame cap: menus otherwise run at thousands of frames per second, working the card for nothing. ATTILA_FPS_CAP=0 turns it off.
+// Called just before a frame is handed over (DirectX 11 Present, OpenGL swap) and counted from the last hand-over, so frames
+// come out evenly spaced and a long frame is not followed by a very short one (waiting after the hand-over did that).
+// Moved in front of the hand-over by RenoDX / ATN.
+void frame_cap_wait(void) {
     static LARGE_INTEGER freq, last;
     static long long cap_ticks = -1;
     static HANDLE timer;
@@ -1318,6 +1297,34 @@ SHIM(void, SDL_GL_SwapWindow, (void *w)) {
         }
         QueryPerformanceCounter(&last);
     }
+}
+
+// Frames per second, once every 5 seconds, into the log.
+SHIM(void, SDL_GL_SwapWindow, (void *w)) {
+    static void (__cdecl *r)(void *);
+    static long frames;
+    static ULONGLONG start;
+    if (!r) r = (void *)GetProcAddress(sdl_dll(), "SDL_GL_SwapWindow");
+    {   // Test only, ATTILA_TEST_BURN_US=n: keeps the main thread busy n microseconds every frame. If fps falls by that much the
+        // main thread sets the pace; if it does not, something else does and the main thread has slack.
+        static long long burn = -1, freq;
+        if (burn < 0) { const char *e = getenv("ATTILA_TEST_BURN_US"); LARGE_INTEGER f; QueryPerformanceFrequency(&f); freq = f.QuadPart; burn = e ? atoll(e) * freq / 1000000 : 0; }
+        if (burn) { LARGE_INTEGER t0, t; QueryPerformanceCounter(&t0); do QueryPerformanceCounter(&t); while (t.QuadPart - t0.QuadPart < burn); }
+    }
+    if (!g_dx11_no_gl) {
+        int shot = test_shot_due();   // unattended test runs: a picture of this frame before it is shown
+        static int shot_final = -1;   // test: ATTILA_TEST_SHOT_FINAL=1 takes it from the window's own picture, after the frame-rate number
+        if (shot_final < 0) shot_final = getenv("ATTILA_TEST_SHOT_FINAL") != NULL;
+        if (shot >= 0 && !shot_final) gl_test_shot(shot);
+        if (fps_overlay_on()) gl_fps_overlay();
+        if (menu_button_visible()) gl_menu_button();
+        if (shot >= 0 && shot_final) { g_gl_shot_window = 1; gl_test_shot(shot); g_gl_shot_window = 0; }
+        frame_cap_wait();
+        r(w);
+    }
+    test_frame_done();
+    g_frame_no++;
+    if (g_frame_no == 600) { extern void dx12_start_worked(void); dx12_start_worked(); }   // drawing for a while: a DirectX 12 start got through
     ULONGLONG now = GetTickCount64();
     if (!start) start = now;
     frames++;

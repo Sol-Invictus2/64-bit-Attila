@@ -457,6 +457,7 @@ SYSV static uint8_t dx_present(uint8_t *dev, void *src, void *dst) {
         out->lpVtbl->Release(out);
     }
     dx_gpu_frame_end();
+    { extern void frame_cap_wait(void); frame_cap_wait(); }   // frame cap, before Present (RenoDX / ATN)
     double t_present = dx_now_ms();
     // test: ATTILA_DX11_NO_PRESENT=1 hands nothing to Windows (the frame is only sent to the card). For telling apart
     // what the hidden test window's hand-over costs from what the drawing itself costs.
@@ -491,7 +492,7 @@ SYSV static uint8_t dx_present(uint8_t *dev, void *src, void *dst) {
     dx_depth_frame_end(g_dxs.draws);
     dx_q_stats_flush();
     test_note_draws(g_dxs.draws);
-    { extern SYSV void sh_SDL_GL_SwapWindow(void *); sh_SDL_GL_SwapWindow(DXF(g_dx.dev, 0x78, void *)); }   // frame count + cap only
+    { extern SYSV void sh_SDL_GL_SwapWindow(void *); sh_SDL_GL_SwapWindow(DXF(g_dx.dev, 0x78, void *)); }   // frame count only
     if (g_dx.frames < 400 && g_dx.frames % 50 == 0) log_line("DirectX 11: frame %llu: %u draws (%u to back buffer), no vs %u, no ps %u, no layout %u", (unsigned long long)g_dx.frames, g_dxs.draws, g_dxs.to_bb, g_dxs.no_vs, g_dxs.no_ps, g_dxs.no_layout);
     memset(&g_dxs, 0, sizeof g_dxs);
     if (++g_dx.frames == 1 || FAILED(hr)) log_line("DirectX 11: present #%llu: 0x%08lx", (unsigned long long)g_dx.frames, (unsigned long)hr);

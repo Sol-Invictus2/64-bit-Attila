@@ -525,6 +525,7 @@ static void relocate(Module *m, int do_copy) {
 #include "key_trace.inc"
 #include "film_trace.inc"
 #include "mouse_cursor.inc"
+#include "context_camera.inc"
 #include "mod_support.inc"
 #include "pass_stats.inc"
 #include "shadow_rate.inc"
@@ -555,6 +556,7 @@ static void apply_game_patches(void) {
     patch_key_trace();
     patch_film_trace();
     patch_mouse_cursor();
+    patch_context_camera();
     patch_animation_missing_tracks();
     test_mod_command();
     patch_eight_player_campaign();
