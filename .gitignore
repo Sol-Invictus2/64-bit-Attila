@@ -33,3 +33,4 @@ pkg_*.txt
 
 # the work diary stays on the PC
 CHANGES_NOT_RELEASED.md
+crash_webhook.h

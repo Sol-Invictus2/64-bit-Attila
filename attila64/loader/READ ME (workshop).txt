@@ -1,5 +1,5 @@
 64-BIT ATTILA
-(version 1.3.27)
+(version 1.3.28)
 
 Bugs, crashes and logs: post them on Discord, https://discord.gg/3TUEGTMshP
 
@@ -29,6 +29,15 @@ HOW TO INSTALL (about 5 minutes)
 FIRST START
   The first start can take a minute or more. A mod list opens: tick your mods and press
   Play. Click to skip the intro movie.
+
+NEW IN 1.3.28  (crash reports in one click)
+  - After a crash, the next time you start the game the mod list asks once:
+    "Send the crash report to the developer?". Yes sends the game's log (what the game
+    did before the crash, your graphics card, Windows version and mod list), with your
+    Windows user name taken out. No sends nothing. This helps find and fix crashes.
+  - To never be asked: put a line  crash_reports=off  in settings.txt in the attila64
+    folder.
+  - Players on 1.3.19 or newer get this version by themselves at the next start.
 
 NEW IN 1.3.27  (fewer false crashes with overlays, HDR fix; thanks to ATN / RenoDX)
   - The game no longer closes when a graphics driver, ReShade or another overlay, or a

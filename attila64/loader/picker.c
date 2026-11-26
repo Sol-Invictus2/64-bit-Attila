@@ -21,7 +21,7 @@ static char *g_other;        // lines of used_mods.txt that are neither mods nor
 static HWND g_list, g_size_box, g_sharp_box, g_shadow_box, g_fps_box, g_dx11_again, g_gfx_box, g_perf_box, g_flag_box, g_up_box;
 static int g_result;
 
-enum { ID_LIST = 100, ID_UP, ID_DOWN, ID_ALL, ID_NONE, ID_PLAY, ID_QUIT, ID_SIZE, ID_SHARP, ID_GFX, ID_SHADOW, ID_COPYLOG, ID_SHOWLOG, ID_FPS, ID_DX11_AGAIN, ID_PICTURE, ID_PERF, ID_FLAGS, ID_UPSCALE, ID_THEME, ID_TOP, ID_LAUNCHER, WM_AUTO = WM_APP + 1 };
+enum { ID_LIST = 100, ID_UP, ID_DOWN, ID_ALL, ID_NONE, ID_PLAY, ID_QUIT, ID_SIZE, ID_SHARP, ID_GFX, ID_SHADOW, ID_COPYLOG, ID_SHOWLOG, ID_FPS, ID_DX11_AGAIN, ID_PICTURE, ID_PERF, ID_FLAGS, ID_UPSCALE, ID_THEME, ID_TOP, ID_LAUNCHER, WM_AUTO = WM_APP + 1, WM_CRASH_OFFER = WM_APP + 7 };
 
 // Interface size, kept in settings.txt next to the exe (a percentage, or "like1080p" for the automatic size). The engine reads it
 // at start. Since Test 18 the first entry (the default, also for the old "interface_size=auto" that earlier versions saved
@@ -333,6 +333,9 @@ static void copy_last_log(HWND w) {
                            "If it is too long to paste there, press \"Show log file\" and send the file.", "64-bit Attila", MB_ICONINFORMATION);
     else MessageBoxA(w, "Could not copy the log. Press \"Show log file\" and send the file instead.", "64-bit Attila", MB_ICONWARNING);
 }
+
+#include "version.h"
+#include "crash_send.inc"   // the "send the crash report?" question
 
 // Opens the folder with the log selected, so it can be attached or uploaded.
 static void show_log_file(HWND w) {
@@ -1289,6 +1292,7 @@ static LRESULT CALLBACK picker_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
             SendMessageA(g_theme_box, CB_SETCURSEL, (WPARAM)g_theme, 0);
         }
         if (last_game_crashed()) add_control(w, "STATIC", "Last game crashed:\nplease send its log.", 0, 524, 479, 108, 30, 0);
+        PostMessageA(w, WM_CRASH_OFFER, 0, 0);   // asked once the window shows (crash_send.inc)
         add_control(w, "BUTTON", "Copy last log", WS_TABSTOP, 524, 511, 108, 24, ID_COPYLOG);
         add_control(w, "BUTTON", "Show log file", WS_TABSTOP, 524, 537, 108, 24, ID_SHOWLOG);
         add_control(w, "BUTTON", "Play", WS_TABSTOP | BS_DEFPUSHBUTTON, 524, 566, 108, 34, ID_PLAY);
@@ -1366,6 +1370,7 @@ static LRESULT CALLBACK picker_proc(HWND w, UINT msg, WPARAM wp, LPARAM lp) {
         ((MINMAXINFO *)lp)->ptMinTrackSize.y = r.bottom - r.top;
         return 0;
     }
+    case WM_CRASH_OFFER: crash_send_offer(w); return 0;
     case WM_AUTO:   // ATTILA_PICKER_AUTO=1: untick the first, move the last to the top, Play; =2: Play with the list as it is
         if (g_nmods > 1 && strcmp(getenv("ATTILA_PICKER_AUTO") ? getenv("ATTILA_PICKER_AUTO") : "", "2")) {
             ListView_SetCheckState(g_list, 0, FALSE);
