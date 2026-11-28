@@ -127,24 +127,54 @@ static void crash_first_line(const char *text, char *out, size_t size) {
     out[i] = 0;
 }
 
-// Sends the log as a file to the webhook. 1 = Discord took it.
-static int crash_post(const char *text, size_t len, const char *line) {
+// The crash dump the game wrote next to the log (loader.c crash_write_dump), read whole (the caller frees it), but only when
+// it belongs to this log: written within 2 minutes of the log's last line, and small enough to go with it (Discord takes
+// up to 10 MB in all). NULL otherwise.
+static char *crash_dump_for_log(size_t *len) {
+    char path[MAX_PATH + 32], dump[MAX_PATH + 32];
+    last_log_path(path, MAX_PATH);
+    snprintf(dump, sizeof dump, "%s", path);
+    char *s = strrchr(dump, '\\');
+    if (!s) return NULL;
+    snprintf(s + 1, sizeof dump - (size_t)(s + 1 - dump), "attila64_crash.dmp");
+    WIN32_FILE_ATTRIBUTE_DATA a, b;
+    if (!GetFileAttributesExA(path, GetFileExInfoStandard, &a) || !GetFileAttributesExA(dump, GetFileExInfoStandard, &b)) return NULL;
+    ULARGE_INTEGER ta = {{a.ftLastWriteTime.dwLowDateTime, a.ftLastWriteTime.dwHighDateTime}}, tb = {{b.ftLastWriteTime.dwLowDateTime, b.ftLastWriteTime.dwHighDateTime}};
+    unsigned long long gap = ta.QuadPart > tb.QuadPart ? ta.QuadPart - tb.QuadPart : tb.QuadPart - ta.QuadPart;
+    if (gap > 120ull * 10000000ull || b.nFileSizeHigh || b.nFileSizeLow > (8u << 20)) return NULL;
+    FILE *f = fopen(dump, "rb");
+    if (!f) return NULL;
+    char *data = malloc(b.nFileSizeLow ? b.nFileSizeLow : 1);
+    *len = data ? fread(data, 1, b.nFileSizeLow, f) : 0;
+    fclose(f);
+    if (data && !*len) { free(data); data = NULL; }
+    return data;
+}
+
+// Sends the log (and the crash dump, when dump is not NULL) as files to the webhook. 1 = Discord took it.
+static int crash_post(const char *text, size_t len, const char *line, const char *dump, size_t dump_len) {
     static const char *boundary = "----attila64crashreport7f3a";
     char json[512];
-    snprintf(json, sizeof json, "{\"content\":\"Crash report: 64-bit Attila " APP_VERSION_TEXT "\\n%s\",\"allowed_mentions\":{\"parse\":[]}}", line);
+    snprintf(json, sizeof json, "{\"content\":\"Crash report: 64-bit Attila " APP_VERSION_TEXT "\\n%s%s\",\"allowed_mentions\":{\"parse\":[]}}",
+             line, dump ? "\\n(with crash dump)" : "");
     char head[1024];
     int hn = snprintf(head, sizeof head,
         "--%s\r\nContent-Disposition: form-data; name=\"payload_json\"\r\nContent-Type: application/json\r\n\r\n%s\r\n"
         "--%s\r\nContent-Disposition: form-data; name=\"files[0]\"; filename=\"attila64_log.txt\"\r\nContent-Type: text/plain\r\n\r\n",
         boundary, json, boundary);
+    char mid[256];
+    int mn = dump ? snprintf(mid, sizeof mid, "\r\n--%s\r\nContent-Disposition: form-data; name=\"files[1]\"; filename=\"attila64_crash.dmp\"\r\n"
+                                              "Content-Type: application/octet-stream\r\n\r\n", boundary) : 0;
     char tail[96];
     int tn = snprintf(tail, sizeof tail, "\r\n--%s--\r\n", boundary);
-    size_t total = (size_t)hn + len + (size_t)tn;
+    size_t total = (size_t)hn + len + (size_t)mn + (dump ? dump_len : 0) + (size_t)tn;
     char *body = malloc(total);
     if (!body) return 0;
-    memcpy(body, head, (size_t)hn);
-    memcpy(body + hn, text, len);
-    memcpy(body + hn + len, tail, (size_t)tn);
+    char *w = body;
+    memcpy(w, head, (size_t)hn); w += hn;
+    memcpy(w, text, len); w += len;
+    if (dump) { memcpy(w, mid, (size_t)mn); w += mn; memcpy(w, dump, dump_len); w += dump_len; }
+    memcpy(w, tail, (size_t)tn);
 
     wchar_t path[256];
     MultiByteToWideChar(CP_UTF8, 0, CRASH_WEBHOOK_PATH, -1, path, 256);
@@ -186,7 +216,7 @@ static void crash_send_offer(HWND w) {
     crash_mark_asked(stamp);   // asked once, whatever the answer
     if (!crash_auto() && MessageBoxA(w, "64-bit Attila crashed last time.\n\n"
                        "Send the crash report to the developer? It is the game's log: what the game did before the crash, "
-                       "your graphics card, Windows version and mod list. Your Windows user name is taken out. Nothing else is sent.\n\n"
+                       "your graphics card, Windows version and mod list. Your Windows user name is taken out. Nothing else is sent without asking.\n\n"
                        "(To never be asked: crash_reports=off in settings.txt.)",
                     "64-bit Attila", MB_YESNO | MB_ICONQUESTION) != IDYES) return;
     char *text = last_log_text();
@@ -196,9 +226,23 @@ static void crash_send_offer(HWND w) {
     crash_first_line(text, line, sizeof line);
     size_t len = strlen(text);
     if (len > (9u << 20)) len = 9u << 20;   // Discord takes files up to 10 MB
+    // The crash dump goes only with a second Yes: it is a copy of part of the game's memory, so unlike the log it can not be
+    // cleaned of names first. Not offered when log and dump together would pass 9.5 MB.
+    size_t dump_len = 0;
+    char *dump = crash_dump_for_log(&dump_len);
+    if (dump && len + dump_len > (19u << 19)) { free(dump); dump = NULL; }
+    if (dump && !crash_auto()) {
+        char q[600];
+        snprintf(q, sizeof q, "Also send the crash dump (%lu KB)?\n\n"
+                 "It is a snapshot of part of the game's memory at the moment of the crash, and the best help for finding the cause. "
+                 "It can contain your Steam name and the names of folders on this PC, and it is only seen by the developer.\n\n"
+                 "No = only the log is sent.", (unsigned long)(dump_len / 1024 + 1));
+        if (MessageBoxA(w, q, "64-bit Attila", MB_YESNO | MB_ICONQUESTION) != IDYES) { free(dump); dump = NULL; }
+    }
     HCURSOR old = SetCursor(LoadCursor(NULL, IDC_WAIT));
-    int ok = crash_post(text, len, line);
+    int ok = crash_post(text, len, line, dump, dump_len);
     SetCursor(old);
+    free(dump);
     free(text);
     crash_test_note(ok ? "sent" : "not sent", 0, NULL);
     if (!crash_auto()) MessageBoxA(w, ok ? "Crash report sent. Thank you!"

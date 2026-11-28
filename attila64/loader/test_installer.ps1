@@ -1,4 +1,4 @@
-# Installer tests, all inside a temporary folder. The real game folder and desktop are not touched.
+﻿# Installer tests, all inside a temporary folder. The real game folder and desktop are not touched.
 # -NoGame skips starting the game, for when the player has theirs open.
 param([switch]$NoGame)
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -28,7 +28,7 @@ if (-not $p.WaitForExit(90000)) { $p.Kill(); 'TIMED OUT' }
 Get-Content "$t\wait.txt"
 
 '--- 3. files match'
-$map = @{ 'attila64.exe' = "$root\attila64.exe"; 'SDL2.dll' = "$root\SDL2.dll"; 'steam_api64.dll' = "$root\steam_api64.dll"; 'libstdc++.so.6' = "$root\..\lib\libstdc++.so.6"; 'libgcc_s.so.1' = "$root\..\lib\libgcc_s.so.1"; 'Attila' = $real; 'packs\attila_8player_lobby.pack' = "$root\..\..\attila_8player\out8\attila_8player_lobby.pack"; 'packs\attila_8v8_battle.pack' = "$root\..\..\attila_8player\out8\attila_8v8_battle.pack"; 'packs\1212\!!1212ad_flag_wave.pack' = "$root\..\flagpack\!!1212ad_flag_wave.pack"; 'themes\mongol.jpg' = "$root\themes\mongol.jpg"; 'themes\glass.jpg' = "$root\themes\glass.jpg"; 'themes\islamic.jpg' = "$root\themes\islamic.jpg" }
+$map = @{ 'attila64.exe' = "$root\attila64.exe"; 'SDL2.dll' = "$root\SDL2.dll"; 'steam_api64.dll' = "$root\steam_api64.dll"; 'libstdc++.so.6' = "$root\..\lib\libstdc++.so.6"; 'libgcc_s.so.1' = "$root\..\lib\libgcc_s.so.1"; 'Attila' = $real; 'packs\attila_8player_lobby.pack' = "$root\..\..\attila_8player\out8\attila_8player_lobby.pack"; 'packs\attila_8v8_battle.pack' = "$root\..\..\attila_8player\out8\attila_8v8_battle.pack"; 'themes\mongol.jpg' = "$root\themes\mongol.jpg"; 'themes\glass.jpg' = "$root\themes\glass.jpg"; 'themes\islamic.jpg' = "$root\themes\islamic.jpg" }
 foreach ($k in $map.Keys) {
     $a = (Get-FileHash -LiteralPath "$t\game\attila64\$k" -Algorithm MD5).Hash; $b = (Get-FileHash -LiteralPath $map[$k] -Algorithm MD5).Hash
     "{0}: {1}" -f $k, $(if ($a -eq $b) { 'same' } else { 'DIFFERENT' })
@@ -41,11 +41,14 @@ $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut("$t\icon.lnk")
 '--- 3b. update over an older install: its DirectX 12 files are removed, settings kept'
 New-Item -ItemType Directory -Force "$t\game\attila64\dx12" | Out-Null
 'opengl32.dll', 'libgallium_wgl.dll', 'dxil.dll' | ForEach-Object { Set-Content "$t\game\attila64\dx12\$_" 'old' }
+New-Item -ItemType Directory -Force "$t\game\attila64\packs\1212" | Out-Null
+Set-Content "$t\game\attila64\packs\1212\!!1212ad_flag_wave.pack" 'old'   # shipped up to 1.3.32, removed by 1.3.33+
 Set-Content "$t\game\attila64\settings.txt" 'interface_size=125'
 $p = Start-Process $exe -PassThru -NoNewWindow -RedirectStandardOutput "$t\update.txt"
 if (-not $p.WaitForExit(60000)) { $p.Kill(); 'TIMED OUT' }
 Get-Content "$t\update.txt" | Select-Object -Last 2
 "dx12 folder gone after update: " + (-not (Test-Path "$t\game\attila64\dx12"))
+"old 1212 flag pack + its folder gone after update: " + (-not (Test-Path "$t\game\attila64\packs\1212"))
 "settings kept: " + ((Get-Content "$t\game\attila64\settings.txt" -Raw) -match 'interface_size=125')
 "loader updated: " + ((Get-FileHash "$t\game\attila64\attila64.exe" -Algorithm MD5).Hash -eq (Get-FileHash "$root\attila64.exe" -Algorithm MD5).Hash)
 

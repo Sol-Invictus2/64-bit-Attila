@@ -223,12 +223,14 @@ void perffix_path(int which, char *out, size_t size) {
     GetModuleFileNameA(NULL, exe, sizeof exe);
     char *s = strrchr(exe, '\\');
     if (s) *s = 0;
-    snprintf(out, size, which ? "%s\\..\\..\\..\\workshop\\content\\325610\\3824249154\\perffix64.dll" : "%s\\plugins\\perffix64.dll", exe);
+    snprintf(out, size, which == 1 ? "%s\\..\\..\\..\\workshop\\content\\325610\\3824249154\\perffix64.dll"
+                      : which == 2 ? "%s\\unticked\\perffix64.dll" : "%s\\plugins\\perffix64.dll", exe);
 }
-// 1 = plugins\perffix64.dll is there or the Workshop copy is (plugins.inc copies it in at the start of the game).
+// 1 = plugins\perffix64.dll is there, the Workshop copy is (plugins.inc copies it in at the start of the game), or the copy
+// an untick moved into attila64\unticked (which = 2; plugins.inc moves it back when ticked again).
 static int perffix_available(void) {
     char p[MAX_PATH * 2];
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         perffix_path(i, p, sizeof p);
         if (GetFileAttributesA(p) != INVALID_FILE_ATTRIBUTES) return 1;
     }
@@ -245,11 +247,14 @@ void framebridge_path(int which, char *out, size_t size) {
     GetModuleFileNameA(NULL, exe, sizeof exe);
     char *s = strrchr(exe, '\\');
     if (s) *s = 0;
-    snprintf(out, size, which ? "%s\\..\\..\\..\\workshop\\content\\325610\\3828791891\\FrameBridge" : "%s\\..\\FrameBridge", exe);
+    snprintf(out, size, which == 1 ? "%s\\..\\..\\..\\workshop\\content\\325610\\3828791891\\FrameBridge"
+                      : which == 2 ? "%s\\unticked\\FrameBridge" : "%s\\..\\FrameBridge", exe);
 }
+// which = 2: attila64\unticked\FrameBridge, where an untick moves the add-on out of the game folder (so normal Attila does
+// not load it either); plugins.inc moves it back when ticked again.
 static int framebridge_available(void) {
     char p[MAX_PATH * 2], h[MAX_PATH * 2 + 16];
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         framebridge_path(i, p, sizeof p);
         snprintf(h, sizeof h, "%s\\helper64.exe", p);
         if (GetFileAttributesA(h) != INVALID_FILE_ATTRIBUTES) return 1;

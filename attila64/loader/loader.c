@@ -517,6 +517,7 @@ static void relocate(Module *m, int do_copy) {
 // ---- The game changes, by topic. One translation unit: these files see everything above and each other, in this order.
 #include "game_fixes.inc"
 #include "interface.inc"
+#include "crash_guards.inc"
 #include "effects_and_tests.inc"
 #include "multiplayer.inc"
 #include "battle_choice.inc"
@@ -536,6 +537,7 @@ static void relocate(Module *m, int do_copy) {
 #include "prep_parallel.inc"
 #include "tracker_grain.inc"
 #include "plugins.inc"
+#include "pc_profile.inc"
 #include "dx11_device.inc"
 #include "ui_x2.inc"
 
@@ -576,6 +578,7 @@ static void apply_game_patches(void) {
     patch_tick_trace();
     patch_skymap_trace();
     patch_version_text();
+    patch_crash_guards();
     patch_skip_movies();
     patch_vfx_pool_locks();
     patch_vfx_gate();
@@ -973,7 +976,89 @@ __attribute__((noinline)) static void crash_note_unreadable_file(EXCEPTION_RECOR
                   "Installed Files > Verify integrity of game files; for a mod's pack, unsubscribe and subscribe again; if it stays, check that drive.");
 }
 
-// The report: what happened, the registers and the game's and our code addresses on the stack, then the game ends.
+// 1 = the bytes just before v are a call instruction, so v is a real return address (the way back into a caller), not a
+// number on the stack that only happens to lie in the code. Before 1.3.31 every such number was listed; most were data
+// (the 1.3.30 substr reports showed only Attila+2de8023 and read-only data). lo = start of the module.
+static int code_readable(const void *p) {   // a module's range can have holes: never read one inside the crash report
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery(p, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) return 0;
+    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return 0;
+    return (mbi.Protect & (PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY | PAGE_EXECUTE)) != 0;
+}
+static int after_call(const uint8_t *v, const uint8_t *lo) {
+    if (v - 7 < lo || !code_readable(v - 7) || !code_readable(v - 1)) return 0;
+    if (v[-5] == 0xE8) return 1;                                     // call rel32
+    if (v[-6] == 0xFF && (v[-5] == 0x15 || (v[-5] & 0xF8) == 0x90)) return 1;   // call [rip+d32] / call [reg+d32]
+    if (v[-7] == 0xFF && v[-6] == 0x94) return 1;                    // call [sib+d32]
+    if (v[-4] == 0xFF && v[-3] == 0x54) return 1;                    // call [sib+d8]
+    if (v[-3] == 0xFF && ((v[-2] & 0xF8) == 0x50 || v[-2] == 0x14)) return 1;   // call [reg+d8] / call [sib]
+    if (v[-2] == 0xFF && ((v[-1] & 0xF8) == 0xD0 || ((v[-1] & 0xF8) == 0x10 && v[-1] != 0x14 && v[-1] != 0x15))) return 1;   // call reg / call [reg]
+    return 0;
+}
+
+// A crash dump next to the log (attila64_crash.dmp, the one before kept as attila64_crash_previous.dmp): registers, every
+// thread's stack and the memory they point at, so the cause can be read later on another PC. Written by a thread of its own
+// (the crashed thread may have little stack left). The Linux game's stacks are not where Windows expects a thread's stack, so
+// 256 KB from the crashed thread's stack pointer are added by hand. dbghelp.dll is loaded only here. ATTILA_NO_CRASH_DUMP=1: none.
+#include <dbghelp.h>
+typedef struct { EXCEPTION_POINTERS ep; DWORD tid; uint64_t rsp; int extra_done; wchar_t path[MAX_PATH + 32]; } CrashDumpJob;
+static BOOL CALLBACK crash_dump_cb(PVOID param, const PMINIDUMP_CALLBACK_INPUT in, PMINIDUMP_CALLBACK_OUTPUT out) {
+    CrashDumpJob *j = (CrashDumpJob *)param;
+    if (in->CallbackType == CancelCallback) { out->Cancel = FALSE; out->CheckCancel = FALSE; return TRUE; }
+    if (in->CallbackType != MemoryCallback) return TRUE;
+    if (j->extra_done) return FALSE;
+    j->extra_done = 1;
+    MEMORY_BASIC_INFORMATION mbi;
+    uint64_t base = j->rsp & ~0xfffull, size = 0x40000;
+    if (!VirtualQuery((void *)(uintptr_t)base, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) return FALSE;
+    uint64_t end = (uint64_t)(uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+    if (base + size > end) size = end - base;
+    out->MemoryBase = base;
+    out->MemorySize = (ULONG)size;
+    return TRUE;
+}
+static DWORD WINAPI crash_dump_thread(void *param) {
+    CrashDumpJob *j = (CrashDumpJob *)param;
+    typedef BOOL (WINAPI *WriteFn)(HANDLE, DWORD, HANDLE, MINIDUMP_TYPE, PMINIDUMP_EXCEPTION_INFORMATION, PMINIDUMP_USER_STREAM_INFORMATION, PMINIDUMP_CALLBACK_INFORMATION);
+    HMODULE dh = LoadLibraryA("dbghelp.dll");
+    WriteFn write = dh ? (WriteFn)(void *)GetProcAddress(dh, "MiniDumpWriteDump") : NULL;
+    if (!write) return 1;
+    HANDLE f = CreateFileW(j->path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) return 2;
+    MINIDUMP_EXCEPTION_INFORMATION mei = {j->tid, &j->ep, FALSE};
+    MINIDUMP_CALLBACK_INFORMATION cb = {crash_dump_cb, j};
+    BOOL ok = write(GetCurrentProcess(), GetCurrentProcessId(), f,
+                    (MINIDUMP_TYPE)(MiniDumpWithIndirectlyReferencedMemory | MiniDumpWithThreadInfo | MiniDumpWithUnloadedModules), &mei, NULL, &cb);
+    CloseHandle(f);
+    return ok ? 0 : 3;
+}
+__attribute__((noinline)) static void crash_write_dump(EXCEPTION_RECORD *r, CONTEXT *c) {
+    if (getenv("ATTILA_NO_CRASH_DUMP")) return;
+    static CrashDumpJob j;
+    static volatile LONG once;
+    if (InterlockedIncrement(&once) != 1) return;
+    j.ep.ExceptionRecord = r;
+    j.ep.ContextRecord = c;
+    j.tid = GetCurrentThreadId();
+    j.rsp = c->Rsp;
+    wchar_t old[MAX_PATH + 32];
+    DWORD n = GetModuleFileNameW(NULL, j.path, MAX_PATH);
+    wchar_t *s = n ? wcsrchr(j.path, L'\\') : NULL;
+    if (!s) return;
+    wcscpy(s + 1, L"attila64_crash_previous.dmp");
+    wcscpy(old, j.path);
+    wcscpy(s + 1, L"attila64_crash.dmp");
+    MoveFileExW(j.path, old, MOVEFILE_REPLACE_EXISTING);
+    HANDLE t = CreateThread(NULL, 1 << 20, crash_dump_thread, &j, 0, NULL);
+    DWORD code = 9;
+    if (t) { WaitForSingleObject(t, 20000); GetExitCodeThread(t, &code); CloseHandle(t); }
+    WIN32_FILE_ATTRIBUTE_DATA a;
+    if (code == 0 && GetFileAttributesExW(j.path, GetFileExInfoStandard, &a))
+        log_line("crash dump: attila64_crash.dmp (%lu KB) in the attila64 folder", (unsigned long)(a.nFileSizeLow / 1024 + 1));
+    else log_line("crash dump: not written (%lu)", (unsigned long)code);
+}
+
+// The report: what happened, the registers, the chain of calls that led there, a crash dump, then the game ends.
 __attribute__((noinline)) static LONG crash_report(EXCEPTION_RECORD *r, CONTEXT *c) {
     log_go_sync();
     log_line("CRASH code %08lx at %p (read/write %llu, address %p)", r->ExceptionCode, (void *)c->Rip,
@@ -983,20 +1068,30 @@ __attribute__((noinline)) static LONG crash_report(EXCEPTION_RECORD *r, CONTEXT 
     log_line("rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx rsp=%llx rbp=%llx", c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rsi, c->Rdi, c->Rsp, c->Rbp);
     extern const char *shim_nearest(void *addr);
     uint8_t *self = (uint8_t *)GetModuleHandleA(NULL);
-    log_line("in attila64.exe at offset %llx, nearest shim before it: %s", (unsigned long long)((uint8_t *)c->Rip - self), shim_nearest((void *)c->Rip));
+    if ((uint8_t *)c->Rip >= self && (uint8_t *)c->Rip < self + (4u << 20))
+        log_line("in attila64.exe at offset %llx, nearest shim before it: %s", (unsigned long long)((uint8_t *)c->Rip - self), shim_nearest((void *)c->Rip));
+    else log_line("crashed in %s", loader_where((void *)c->Rip));
+    // The chain of calls: only stack values right after a call instruction (see after_call), newest first. The names of the
+    // game's functions are not in the release; tools\name_crash.ps1 adds them to a log.
+    log_line("call chain (newest first):");
     uint64_t *sp = (uint64_t *)c->Rsp;
     int shown = 0;
-    for (int i = 0; i < 1200 && shown < 24; i++) {
+    for (int i = 0; i < 4000 && shown < 32; i++) {
         MEMORY_BASIC_INFORMATION mbi;
         if (!VirtualQuery(sp + i, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) break;
         uint64_t v = sp[i];
-        if ((uint8_t *)v >= self && (uint8_t *)v < self + (4u << 20)) log_line("  stack-exe %03x: %s", i * 8, shim_nearest((void *)v));
+        if ((uint8_t *)v >= self + 0x1000 && (uint8_t *)v < self + (4u << 20) && after_call((const uint8_t *)v, self)) {
+            log_line("  stack+%03x: attila64.exe %s", i * 8, shim_nearest((void *)v));
+            shown++;
+        }
         for (int k = 0; k < g_nmods; k++)
-            if ((uint8_t *)v >= g_mods[k].lo && (uint8_t *)v < g_mods[k].hi && (k || v < 0x3d00000)) {
+            if ((uint8_t *)v >= g_mods[k].lo && (uint8_t *)v < g_mods[k].hi && (k || v < 0x3d00000) && after_call((const uint8_t *)v, g_mods[k].lo)) {
                 log_line("  stack+%03x: %s+%llx", i * 8, g_mods[k].pub.name, v - (uint64_t)g_mods[k].pub.base);
                 shown++;
             }
     }
+    if (!shown) log_line("  (no return addresses found on the stack)");
+    crash_write_dump(r, c);
     ExitProcess(4);
     return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -1108,33 +1203,20 @@ int main(int argc, char **argv) {
             char pattern[MAX_PATH];
             snprintf(pattern, sizeof pattern, "%s\\*.pack", packs);
             HANDLE h = FindFirstFileA(pattern, &fd);
-            // The waving-flags pack for 1212 AD (packs\1212\!!1212ad_flag_wave.pack: 1212's banner and pennant models with the
-            // cloth data of JGdaCaesar's Flag Wave, made by mk1212_flags\build_flags.ps1): first of all, so it wins over
-            // 1212's own copies, and only when the player's list has a 1212 pack and the engine fix and the flags are ticked.
-            static char flagdir[MAX_PATH];
-            int flags = 0;
+            // Up to 1.3.32 an old test copy of a 1212 AD waving-flags pack was shipped in packs\1212 and loaded first. JGdaCaesar
+            // asked for it to go (2026-11-28: outdated, for internal testing only). 1.3.33+ no longer ship or load it; a copy
+            // left by an older install is deleted here as well as by the installer.
             {
-                extern int settings_perf_fix(void), settings_flag_wave(void);
                 char fp[MAX_PATH + 40];
-                snprintf(flagdir, sizeof flagdir, "%s\\1212", packs);
-                snprintf(fp, sizeof fp, "%s\\!!1212ad_flag_wave.pack", flagdir);
-                if (have_list && settings_perf_fix() && settings_flag_wave() && GetFileAttributesA(fp) != INVALID_FILE_ATTRIBUTES) {
-                    FILE *u = fopen(list, "r");
-                    char line[1024];
-                    if (u) {
-                        while (!flags && fgets(line, sizeof line, u))
-                            if (!strncmp(line, "mod ", 4) && strstr(line, "1212") && !strstr(line, "!!1212ad_flag_wave")) flags = 1;
-                        fclose(u);
-                    }
-                }
-                log_line(flags ? "1212 AD in the mod list: its waving-flags pack goes in first (packs\\1212)" : "waving-flags pack for 1212 AD: not loaded (%s)",
-                         !have_list ? "no mod list" : GetFileAttributesA(fp) == INVALID_FILE_ATTRIBUTES ? "not installed" :
-                         !settings_perf_fix() || !settings_flag_wave() ? "unticked in the start window" : "no 1212 pack in the mod list");
+                snprintf(fp, sizeof fp, "%s\\1212\\!!1212ad_flag_wave.pack", packs);
+                if (GetFileAttributesA(fp) != INVALID_FILE_ATTRIBUTES)
+                    log_line("old 1212 AD waving-flags test pack in packs\\1212: %s", DeleteFileA(fp) ? "deleted" : "could not be deleted, not loaded");
+                snprintf(fp, sizeof fp, "%s\\1212", packs);
+                RemoveDirectoryA(fp);   // only when empty
             }
             if (h != INVALID_HANDLE_VALUE || have_list) {
                 FILE *f = fopen("used_mods_64.tmp", "w");
                 if (f) {
-                    if (flags) fprintf(f, "add_working_directory \"%s\";\nmod \"!!1212ad_flag_wave.pack\";\n", flagdir);
                     if (h != INVALID_HANDLE_VALUE) {
                         fprintf(f, "add_working_directory \"%s\";\n", packs);
                         do fprintf(f, "mod \"%s\";\n", fd.cFileName); while (FindNextFileA(h, &fd));
@@ -1142,7 +1224,7 @@ int main(int argc, char **argv) {
                     if (have_list) {   // then the player's own list, unchanged
                         FILE *u = fopen(list, "r");
                         char line[1024];
-                        if (u) { while (fgets(line, sizeof line, u)) if (!flags || !strstr(line, "!!1212ad_flag_wave")) fputs(line, f); fclose(u); }
+                        if (u) { while (fgets(line, sizeof line, u)) fputs(line, f); fclose(u); }
                     }
                     int ok = fclose(f) == 0;
                     if (ok && MoveFileExA("used_mods_64.tmp", "used_mods_64.txt", MOVEFILE_REPLACE_EXISTING)) { own_argv[3] = list_arg; argc = 4; }
@@ -1180,6 +1262,7 @@ int main(int argc, char **argv) {
     log_line("64-bit Attila " APP_VERSION_TEXT);   // every log says which version wrote it
     if (g_update_note[0]) log_line("%s", g_update_note);
     if (g_dpi_percent) log_line("Windows display scaling %u%%; the game's window is %s", g_dpi_percent, g_dpi_own ? "in real pixels" : "left to Windows' scaling");
+    pc_profile_start();   // the PC in the log ("PC:" lines, pc_profile.inc), from a background thread
     {
         char why[600];
         if (GetEnvironmentVariableA("ATTILA64_RELAUNCHED", why, sizeof why))

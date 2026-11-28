@@ -57,6 +57,63 @@ static int copy_tree(const char *from, const char *to) {
     return ok;
 }
 
+// Deletes a folder tree. 0 = something is left (a file in use).
+static int delete_tree(const char *dir) {
+    char pat[MAX_PATH * 2], s[MAX_PATH * 2];
+    WIN32_FIND_DATAA fd;
+    int ok = 1;
+    snprintf(pat, sizeof pat, "%s\\*", dir);
+    HANDLE h = FindFirstFileA(pat, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!strcmp(fd.cFileName, ".") || !strcmp(fd.cFileName, "..")) continue;
+            snprintf(s, sizeof s, "%s\\%s", dir, fd.cFileName);
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ok &= delete_tree(s);
+            else {
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY) SetFileAttributesA(s, FILE_ATTRIBUTE_NORMAL);
+                if (!DeleteFileA(s)) ok = 0;
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    return RemoveDirectoryA(dir) && ok;
+}
+
+// Moves a file or folder to "to", replacing what is there. A folder is renamed (same drive), or else copied and deleted.
+// 0 = failed; then "from" is still where it was (a failed copy is cleaned up again).
+static int move_replace(const char *from, const char *to, int is_dir) {
+    char parent[MAX_PATH * 2];
+    snprintf(parent, sizeof parent, "%s", to);
+    char *s = strrchr(parent, '\\');
+    if (s) { *s = 0; CreateDirectoryA(parent, NULL); }
+    if (!is_dir) return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED) != 0;
+    if (GetFileAttributesA(to) != INVALID_FILE_ATTRIBUTES && !delete_tree(to)) return 0;
+    if (MoveFileExA(from, to, 0)) return 1;
+    if (copy_tree(from, to) && delete_tree(from)) return 1;
+    delete_tree(to);
+    return 0;
+}
+
+// Unticked in the start window = out of the folder where it would be loaded, into attila64\unticked; ticked again = back.
+// Before, an untick only left the DLL unloaded (engine fix) or wrote addon=off (upscaling), so the files stayed: the
+// FrameBridge DLLs in the GAME folder, where normal Attila's engine fix (dinput8.dll) finds them too. A tester asked for
+// the files to be gone when unticked. path(0) = where it is used, path(2) = attila64\unticked (picker.c).
+static void unticked_move(const char *what, void (*path)(int, char *, size_t), const char *probe, int on, int is_dir) {
+    char used[MAX_PATH * 2], parked[MAX_PATH * 2], a[MAX_PATH * 2 + 32], b[MAX_PATH * 2 + 32];
+    path(0, used, sizeof used);
+    path(2, parked, sizeof parked);
+    snprintf(a, sizeof a, "%s%s", used, probe);     // the folder's helper64.exe, or the DLL itself
+    snprintf(b, sizeof b, "%s%s", parked, probe);
+    int in_use_place = GetFileAttributesA(a) != INVALID_FILE_ATTRIBUTES, in_parked = GetFileAttributesA(b) != INVALID_FILE_ATTRIBUTES;
+    if (!on && in_use_place) {
+        if (move_replace(used, parked, is_dir)) log_line("%s: unticked in the start window, moved out to attila64\\unticked", what);
+        else log_line("%s: unticked, but could not be moved out to attila64\\unticked (error %lu; is normal Attila running?)", what, GetLastError());
+    } else if (on && !in_use_place && in_parked) {
+        if (move_replace(parked, used, is_dir)) log_line("%s: ticked again, moved back from attila64\\unticked", what);
+        else log_line("%s: ticked, but could not be moved back from attila64\\unticked (error %lu)", what, GetLastError());
+    }
+}
+
 static void read_small(const char *path, char *out, size_t size) {
     out[0] = 0;
     FILE *f = fopen(path, "rb");
@@ -69,7 +126,7 @@ static void read_small(const char *path, char *out, size_t size) {
 // JGdaCaesar's Upscaling and Framegen add-on (<game>\FrameBridge), run by perffix64.dll: the start window's tick.
 // Copied in from his Workshop item when it is missing or the Workshop has another version (his own settings.txt is not
 // in the package, so the player's choices stay); then its addon= line is set to the tick.
-static void framebridge_prepare(void) {
+static void framebridge_set(void) {
     char mine[MAX_PATH * 2], ws[MAX_PATH * 2], a[MAX_PATH * 2 + 32], b[MAX_PATH * 2 + 32];
     int on = settings_upscaling();
     framebridge_path(0, mine, sizeof mine);
@@ -114,6 +171,16 @@ static void framebridge_prepare(void) {
     }
     FILE *f = fopen(path, "wb");
     if (f) { fwrite(out, 1, n, f); fclose(f); log_line("upscaling add-on: %s (start window tick, FrameBridge\\settings.txt)", want); }
+}
+
+// The upscaling tick: ticked = the add-on in the game folder (back from attila64\unticked first), its switch set on;
+// unticked = its switch set off, then the folder moved out to attila64\unticked. JGdaCaesar's 32-bit dinput8.dll can copy
+// the add-on in again from the Workshop when normal Attila starts; the next 64-bit start then moves it out again.
+static void framebridge_prepare(void) {
+    int on = settings_upscaling();
+    if (on) unticked_move("upscaling add-on (FrameBridge)", framebridge_path, "\\helper64.exe", 1, 1);
+    framebridge_set();
+    if (!on) unticked_move("upscaling add-on (FrameBridge)", framebridge_path, "\\helper64.exe", 0, 1);
 }
 
 // His DLL's version marker ("AttilaCPUPerfFix-version:<number>", the number only grows: 7.5 = 750), read from the first
@@ -187,6 +254,8 @@ static void perffix_take_workshop(const char *mine, const char *ws) {
 }
 
 static void perffix_prepare(void) {
+    // unticked: plugins\perffix64.dll moved out to attila64\unticked; ticked again: moved back (then the Workshop check)
+    unticked_move("engine fix (perffix64.dll)", perffix_path, "", settings_perf_fix(), 0);
     if (!settings_perf_fix()) return;
     char mine[MAX_PATH * 2], ws[MAX_PATH * 2], off[MAX_PATH * 2];
     perffix_path(0, mine, sizeof mine);
@@ -209,7 +278,6 @@ static void perffix_prepare(void) {
         }
         log_line("engine fix: waving flags unticked in the start window (flagwave_off.txt)");
     } else if (DeleteFileA(off)) log_line("engine fix: waving flags ticked again, flagwave_off.txt removed");
-    framebridge_prepare();
 }
 
 static void plugins_load(const Module *game) {
@@ -218,6 +286,7 @@ static void plugins_load(const Module *game) {
     char *s = strrchr(g_plugin_dir, '\\');
     strcpy(s ? s + 1 : g_plugin_dir, "plugins");
     perffix_prepare();
+    framebridge_prepare();   // also with the engine fix unticked, so an unticked add-on leaves the game folder
     char pattern[MAX_PATH + 8], names[MAX_PLUGINS][MAX_PATH];
     snprintf(pattern, sizeof pattern, "%s\\*.dll", g_plugin_dir);
     WIN32_FIND_DATAA fd;

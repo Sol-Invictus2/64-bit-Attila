@@ -400,7 +400,7 @@ NEW IN TEST 19 (since Test 14; Tests 16 and 17 could crash in battles, please up
   - Custom Battle (single player) is 4 against 4 again, as in the normal game.
   - If Steam isn't running, a message asks you to start it, instead of a crash.
   - Fixed "cannot reserve ... (error 487)" at the start on some PCs.
-  - Works when the game folder or your user folder has letters like é, å or ö in its name.
+  - Works when the game folder or your user folder has letters like Ã©, Ã¥ or Ã¶ in its name.
 
 WHAT YOU GET
   - No 4 GB memory limit.

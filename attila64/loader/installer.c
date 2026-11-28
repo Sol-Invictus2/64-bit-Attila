@@ -33,9 +33,6 @@ EMBED(f_pack_lobby, "../../attila_8player/out8/attila_8player_lobby.pack")   // 
 EMBED(f_pack_battle, "../../attila_8player/out8/attila_8v8_battle.pack")   // 8v8 battle setup screen
 // JGdaCaesar's Attila Engine Performance Fix (perffix64.dll) is not shipped here since 1.3.15: players subscribe to his
 // Workshop item 3824249154 and the loader copies it in from there (plugins.inc). Uninstall still removes it.
-// 1212 AD's banners and pennants with Flag Wave's cloth data (mk1212_flags\build_flags.ps1); loader.c loads it first,
-// only when the mod list has 1212 AD and the flags are ticked
-EMBED(f_flagpack, "../flagpack/!!1212ad_flag_wave.pack")
 // The start window's themes (picker.c): public-domain / CC0 pictures, and where each is from (CREDITS.txt)
 EMBED(f_theme_mongol, "themes/mongol.jpg")
 EMBED(f_theme_glass, "themes/glass.jpg")
@@ -43,7 +40,10 @@ EMBED(f_theme_islamic, "themes/islamic.jpg")
 EMBED(f_theme_credit, "themes/CREDITS.txt")
 // Up to 1.2 Test 5 the installer also put Mesa's OpenGL-on-DirectX-12 files in a dx12 folder (the start window's DirectX 12
 // choice). Since 2026-11-13 DirectX 11 is the only route offered, so they are no longer shipped, and an update removes them.
-static const char *const g_old_files[] = {"dx12\\opengl32.dll", "dx12\\libgallium_wgl.dll", "dx12\\dxil.dll"};
+// Up to 1.3.32 an old test copy of a 1212 AD waving-flags pack was shipped in packs\1212; JGdaCaesar asked for it to go
+// (2026-11-28), so 1.3.33+ remove it.
+static const char *const g_old_files[] = {"dx12\\opengl32.dll", "dx12\\libgallium_wgl.dll", "dx12\\dxil.dll",
+                                          "packs\\1212\\!!1212ad_flag_wave.pack"};
 static const struct { const char *name; const uint8_t *start, *end; } g_files[] = {
     {"attila64.exe", f_loader_start, f_loader_end},
     {"SDL2.dll", f_sdl_start, f_sdl_end},
@@ -54,7 +54,6 @@ static const struct { const char *name; const uint8_t *start, *end; } g_files[] 
     {"LICENSE.txt", f_license_start, f_license_end},
     {"packs\\attila_8player_lobby.pack", f_pack_lobby_start, f_pack_lobby_end},   // loaded only by the 64-bit engine
     {"packs\\attila_8v8_battle.pack", f_pack_battle_start, f_pack_battle_end},
-    {"packs\\1212\\!!1212ad_flag_wave.pack", f_flagpack_start, f_flagpack_end},
     {"themes\\mongol.jpg", f_theme_mongol_start, f_theme_mongol_end},
     {"themes\\glass.jpg", f_theme_glass_start, f_theme_glass_end},
     {"themes\\islamic.jpg", f_theme_islamic_start, f_theme_islamic_end},
@@ -71,6 +70,8 @@ static int remove_old_files(const char *folder) {
     }
     snprintf(p, sizeof p, "%s\\dx12", folder);
     RemoveDirectoryA(p);
+    snprintf(p, sizeof p, "%s\\packs\\1212", folder);
+    RemoveDirectoryA(p);   // only when empty
     return left;
 }
 #define NFILES (sizeof g_files / sizeof g_files[0])

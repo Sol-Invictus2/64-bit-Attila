@@ -5,7 +5,9 @@ Bugs, crashes and logs: post them on Discord, https://discord.gg/3TUEGTMshP
 Runs **Total War: ATTILA** as a 64-bit game on Windows, using the 64-bit game file Steam offers for the Linux
 version. You need Total War: ATTILA on Steam. Your normal Attila is not changed: Steam's Play button still starts it.
 
-This is the source code of **version 1.3.30**, the same version as on the Steam Workshop.
+This is the source code of **version 1.3.33**, the same version as on the Steam Workshop.
+
+**For developers:** what changed in each version, in the code, is in [CHANGELOG.md](CHANGELOG.md).
 
 ## For players
 

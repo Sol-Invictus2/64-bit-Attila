@@ -1,4 +1,4 @@
-# Self-update tests (self_update.inc + installer "self-update"), all in a made-up Steam folder in Temp:
+﻿# Self-update tests (self_update.inc + installer "self-update"), all in a made-up Steam folder in Temp:
 #   <t>\steamapps\common\Total War Attila\attila64   = an install of THIS build (1.3.20)
 #   <t>\steamapps\workshop\content\325610\3834958414  = the pretend Workshop item
 # -New: folder with a newer build (default ..\test_selfupd_1321, same source with version 1.3.21).
@@ -77,7 +77,7 @@ Remove-Item Env:ATTILA_NO_SELF_UPDATE
 '--- 7. Workshop has a NEWER version: updates and starts the new one'
 Start64
 Check 'new exe ran and logged it' ((Said '1.3.21') -and (Said 'updated from 1.3.20'))
-$map = @{ 'attila64.exe' = "$New\attila64.exe"; 'SDL2.dll' = "$New\SDL2.dll"; 'packs\attila_8v8_battle.pack' = "$New\..\..\attila_8player\out8\attila_8v8_battle.pack"; 'themes\mongol.jpg' = "$New\themes\mongol.jpg"; 'packs\1212\!!1212ad_flag_wave.pack' = "$New\..\flagpack\!!1212ad_flag_wave.pack" }
+$map = @{ 'attila64.exe' = "$New\attila64.exe"; 'SDL2.dll' = "$New\SDL2.dll"; 'packs\attila_8v8_battle.pack' = "$New\..\..\attila_8player\out8\attila_8v8_battle.pack"; 'themes\mongol.jpg' = "$New\themes\mongol.jpg" }
 foreach ($k in $map.Keys) { Check "$k = the new build's" ((Md5 "$a64\$k") -eq (Md5 $map[$k])) }
 Check 'settings.txt kept' ((Get-Content "$a64\settings.txt" -Raw) -match 'interface_size=125')
 Check 'mod_list.txt kept' ((Get-Content "$a64\mod_list.txt" -Raw) -match 'my_mod')
